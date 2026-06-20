@@ -41,6 +41,7 @@ import { Input, Select } from '@/components/ui/Form';
 import { StatCard } from '@/components/ui/StatCard';
 import { useExpenseStore } from '@/stores/expenseStore';
 import { useMeetingStore } from '@/stores/meetingStore';
+import { useStatementStore } from '@/stores/statementStore';
 import { Expense, PayType } from '@/types';
 import { cn, formatCurrency, colorMap, textColorMap } from '@/lib/utils';
 import { formatDateTime, getRecentMonths, formatDate } from '@/utils/dateUtils';
@@ -49,6 +50,7 @@ import { switchExpensePayType, approvePendingBooking, rejectPendingBooking } fro
 export const ExpensePage: React.FC = () => {
   const { expenses, filterExpenses, getStatsByDept, getStatsByRoom, convertToSelfPay, updateExpense } = useExpenseStore();
   const { departments, rooms, getDeptById, getRoomById } = useMeetingStore();
+  const { hasStatement, getAdjustmentsSinceArchive, getStatement } = useStatementStore();
 
   const now = new Date();
   const [viewMonth, setViewMonth] = useState({ year: now.getFullYear(), month: now.getMonth() + 1 });
@@ -277,8 +279,52 @@ export const ExpensePage: React.FC = () => {
     setKeyword('');
   };
 
+  const isArchived = useMemo(() => useMonthFilter && hasStatement(viewMonth.year, viewMonth.month), [viewMonth, useMonthFilter, hasStatement]);
+  const archivedStatement = isArchived ? getStatement(viewMonth.year, viewMonth.month) : undefined;
+  const adjustmentsSinceArchive = useMemo(
+    () => (useMonthFilter ? getAdjustmentsSinceArchive(viewMonth.year, viewMonth.month) : []),
+    [getAdjustmentsSinceArchive, viewMonth, useMonthFilter],
+  );
+  const adjLabelMap: Record<string, string> = { cancel: '取消预约', reject: '驳回申请', modify: '修改预约', quota_change: '额度调整' };
+
   return (
     <div className="space-y-6 animate-fade-in">
+      {adjustmentsSinceArchive.length > 0 && (
+        <div className="rounded-2xl border border-rose-200 bg-gradient-to-r from-rose-50 to-amber-50 p-5 shadow-sm">
+          <div className="flex items-start gap-3">
+            <AlertTriangle size={22} className="text-rose-600 mt-0.5 shrink-0" />
+            <div className="flex-1">
+              <h3 className="font-semibold text-rose-900">
+                {viewMonth.year} 年 {viewMonth.month} 月存在未结调整
+              </h3>
+              <p className="text-sm text-rose-700 mt-0.5">
+                该月已于 {archivedStatement ? formatDateTime(new Date(archivedStatement.archivedAt)) : '-'} 归档，之后有 {adjustmentsSinceArchive.length} 条变动记录：
+              </p>
+              <div className="flex flex-wrap gap-2 mt-2">
+                {['cancel', 'reject', 'modify', 'quota_change'].map((t) => {
+                  const items = adjustmentsSinceArchive.filter((a) => a.type === t);
+                  if (items.length === 0) return null;
+                  return (
+                    <span key={t} className="px-2 py-1 rounded bg-white/70 text-xs text-slate-700 border border-slate-200">
+                      {adjLabelMap[t]} × {items.length}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="text-right shrink-0">
+              <p className="text-xs text-slate-500 mb-1">金额变动</p>
+              <p className={cn(
+                'font-mono font-bold text-lg',
+                adjustmentsSinceArchive.reduce((s, a) => s + a.amountChange, 0) > 0 ? 'text-teal-700' : adjustmentsSinceArchive.reduce((s, a) => s + a.amountChange, 0) < 0 ? 'text-rose-700' : 'text-slate-700',
+              )}>
+                {adjustmentsSinceArchive.reduce((s, a) => s + a.amountChange, 0) >= 0 ? '+' : ''}
+                {formatCurrency(adjustmentsSinceArchive.reduce((s, a) => s + a.amountChange, 0))}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-4">
           <div>

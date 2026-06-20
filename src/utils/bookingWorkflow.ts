@@ -2,9 +2,24 @@ import { useBookingStore } from '@/stores/bookingStore';
 import { useExpenseStore } from '@/stores/expenseStore';
 import { useQuotaStore } from '@/stores/quotaStore';
 import { useMeetingStore } from '@/stores/meetingStore';
+import { useStatementStore } from '@/stores/statementStore';
 import { Booking, BookingStatus } from '@/types';
 import { calcHours } from '@/utils/dateUtils';
 import { parseISO } from 'date-fns';
+
+function recordAdjustmentIfArchived(
+  year: number,
+  month: number,
+  type: 'cancel' | 'reject' | 'modify',
+  description: string,
+  amountChange: number,
+  deptId?: string,
+  relatedId?: string,
+) {
+  const { hasStatement, addAdjustment } = useStatementStore.getState();
+  if (!hasStatement(year, month)) return;
+  addAdjustment({ year, month, type, description, amountChange, deptId, relatedId });
+}
 
 export interface CreateBookingParams {
   roomId: string;
@@ -290,6 +305,39 @@ export function updateBookingWithWorkflow(
     consumeQuota(newDeptId, newYM.year, newYM.month, newAmount);
   }
 
+  const amountDelta = newAmount - oldAmount;
+  const oldMonthChanged = oldYM.year !== newYM.year || oldYM.month !== newYM.month;
+  if (oldMonthChanged) {
+    recordAdjustmentIfArchived(
+      oldYM.year,
+      oldYM.month,
+      'modify',
+      `预约「${params.title ?? booking.title}」移出本月（已移动到 ${newYM.year}-${String(newYM.month).padStart(2, '0')}）`,
+      -oldAmount,
+      booking.deptId,
+      booking.id,
+    );
+    recordAdjustmentIfArchived(
+      newYM.year,
+      newYM.month,
+      'modify',
+      `预约「${params.title ?? booking.title}」移入本月（来自 ${oldYM.year}-${String(oldYM.month).padStart(2, '0')}）`,
+      newAmount,
+      newDeptId,
+      booking.id,
+    );
+  } else if (amountDelta !== 0 || oldPayType !== newPayType || booking.deptId !== newDeptId) {
+    recordAdjustmentIfArchived(
+      newYM.year,
+      newYM.month,
+      'modify',
+      `修改预约「${params.title ?? booking.title}」：金额变化 ${amountDelta >= 0 ? '+' : ''}${amountDelta.toFixed(2)}，类型 ${oldPayType}→${newPayType}`,
+      amountDelta,
+      newDeptId,
+      booking.id,
+    );
+  }
+
   return { ok: true, message: '修改成功' };
 }
 
@@ -314,6 +362,15 @@ export function cancelBookingWithWorkflow(bookingId: string): WorkflowResult {
   }
 
   useBookingStore.getState().cancelBooking(bookingId);
+  recordAdjustmentIfArchived(
+    ym.year,
+    ym.month,
+    'cancel',
+    `取消预约「${booking.title}」(${booking.startAt.slice(0, 10)})`,
+    -amount,
+    booking.deptId,
+    booking.id,
+  );
   return { ok: true, message: '预约已取消，额度已退回（如适用）' };
 }
 
@@ -365,6 +422,11 @@ export function rejectPendingBooking(bookingId: string, remark?: string): Workfl
     return { ok: false, message: '非待申请状态的预约' };
   }
 
+  const room = useMeetingStore.getState().getRoomById(booking.roomId);
+  const hours = calcHours(booking.startAt, booking.endAt);
+  const amount = room ? Math.round(hours * room.hourlyRate * 100) / 100 : 0;
+  const ym = getYearMonth(booking.startAt);
+
   useBookingStore.getState().updateBooking(bookingId, {
     status: 'rejected',
     rejectRemark: remark,
@@ -379,6 +441,16 @@ export function rejectPendingBooking(bookingId: string, remark?: string): Workfl
       rejectAt: new Date().toISOString(),
     });
   }
+
+  recordAdjustmentIfArchived(
+    ym.year,
+    ym.month,
+    'reject',
+    `驳回预约「${booking.title}」(${booking.startAt.slice(0, 10)})${remark ? `：${remark}` : ''}`,
+    -amount,
+    booking.deptId,
+    booking.id,
+  );
 
   return { ok: true, message: '已驳回，排期已释放' };
 }

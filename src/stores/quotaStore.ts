@@ -4,6 +4,26 @@ import { Quota, QuotaPolicy, Department } from '@/types';
 import { seedQuotas, defaultQuotaPolicy, seedDepartments } from '@/data/seed';
 import { generateId } from '@/lib/utils';
 import { startOfMonth, format, addMonths } from 'date-fns';
+import { useStatementStore } from './statementStore';
+
+function recordQuotaAdjustmentIfArchived(
+  year: number,
+  month: number,
+  deptId: string,
+  amountChange: number,
+  description: string,
+) {
+  const { hasStatement, addAdjustment } = useStatementStore.getState();
+  if (!hasStatement(year, month)) return;
+  addAdjustment({
+    year,
+    month,
+    type: 'quota_change',
+    description,
+    amountChange,
+    deptId,
+  });
+}
 
 interface QuotaState {
   quotas: Quota[];
@@ -28,6 +48,8 @@ export const useQuotaStore = create<QuotaState>()(
       policy: defaultQuotaPolicy,
 
       grantQuota: (deptId, year, month, amount) => {
+        const before = get().getQuota(deptId, year, month);
+        const beforeTotal = before?.totalAmount ?? 0;
         set((s) => {
           const existing = s.quotas.find(
             (q) => q.deptId === deptId && q.year === year && q.month === month,
@@ -52,9 +74,21 @@ export const useQuotaStore = create<QuotaState>()(
           };
           return { quotas: [...s.quotas, nq] };
         });
+        const delta = amount - beforeTotal;
+        if (delta !== 0) {
+          recordQuotaAdjustmentIfArchived(
+            year,
+            month,
+            deptId,
+            delta,
+            `重设额度：${beforeTotal.toFixed(2)} → ${amount.toFixed(2)} (${delta >= 0 ? '+' : ''}${delta.toFixed(2)})`,
+          );
+        }
       },
 
       addToQuota: (deptId, year, month, amount) => {
+        const before = get().getQuota(deptId, year, month);
+        const beforeTotal = before?.totalAmount ?? 0;
         set((s) => {
           const existing = s.quotas.find(
             (q) => q.deptId === deptId && q.year === year && q.month === month,
@@ -79,6 +113,15 @@ export const useQuotaStore = create<QuotaState>()(
           };
           return { quotas: [...s.quotas, nq] };
         });
+        if (amount !== 0) {
+          recordQuotaAdjustmentIfArchived(
+            year,
+            month,
+            deptId,
+            amount,
+            `追加额度：${beforeTotal.toFixed(2)} → ${(beforeTotal + amount).toFixed(2)} (+${amount.toFixed(2)})`,
+          );
+        }
       },
 
       consumeQuota: (deptId, year, month, amount) => {

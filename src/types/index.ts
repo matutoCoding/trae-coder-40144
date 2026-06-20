@@ -97,3 +97,68 @@ export interface QuotaPolicy {
   overQuotaStrategy: OverQuotaStrategy;
   autoResetMonthly: boolean;
 }
+
+export interface MonthlyStatementDeptSummary {
+  deptId: string;
+  deptName: string;
+  totalQuota: number;
+  usedQuota: number;
+  remainingQuota: number;
+  selfPay: number;
+  pendingApply: number;
+  rejected: number;
+  finalCheckAmount: number;
+}
+
+export interface MonthlyStatementItem {
+  expenseId: string;
+  bookingId: string;
+  deptId: string;
+  roomId: string;
+  expenseDate: string;
+  hours: number;
+  unitPrice: number;
+  amount: number;
+  payType: PayType;
+  reimburser?: string;
+  meetingTitle: string;
+  meetingRoomName: string;
+  meetingStartTime: string;
+  meetingEndTime: string;
+  source: 'manual' | 'recurring';
+  approveAt?: string;
+  rejectAt?: string;
+  rejectRemark?: string;
+}
+
+export interface AdjustmentRecord {
+  id: string;
+  year: number;
+  month: number;
+  type: 'cancel' | 'reject' | 'modify' | 'quota_change';
+  description: string;
+  amountChange: number;
+  deptId?: string;
+  relatedId?: string;
+  operator?: string;
+  createdAt: string;
+}
+
+export interface MonthlyStatement {
+  id: string;
+  year: number;
+  month: number;
+  deptSummaries: MonthlyStatementDeptSummary[];
+  items: MonthlyStatementItem[];
+  totalQuota: number;
+  totalUsedQuota: number;
+  totalRemaining: number;
+  totalSelfPay: number;
+  totalPendingApply: number;
+  totalRejected: number;
+  totalFinalCheck: number;
+  archivedAt: string;
+  archivedBy?: string;
+  remark?: string;
+  adjustments?: AdjustmentRecord[];
+}

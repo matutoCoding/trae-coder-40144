@@ -13,7 +13,12 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Clock,
+  FileText,
+  CreditCard,
+  Banknote,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -23,9 +28,11 @@ import { StatCard } from '@/components/ui/StatCard';
 import { useQuotaStore } from '@/stores/quotaStore';
 import { useMeetingStore } from '@/stores/meetingStore';
 import { useExpenseStore } from '@/stores/expenseStore';
+import { useBookingStore } from '@/stores/bookingStore';
 import { OverQuotaStrategy } from '@/types';
 import { cn, colorMap, textColorMap, formatCurrency } from '@/lib/utils';
 import { getQuotaPercent, getQuotaStatus } from '@/utils/quotaValidator';
+import { formatTime } from '@/utils/dateUtils';
 
 const OVER_QUOTA_OPTIONS: Array<{ value: OverQuotaStrategy; label: string; desc: string; color: string }> = [
   { value: 'block', label: '超额拦截', desc: '额度不足时不允许创建预约', color: 'rose' },
@@ -35,11 +42,13 @@ const OVER_QUOTA_OPTIONS: Array<{ value: OverQuotaStrategy; label: string; desc:
 
 export const QuotaPage: React.FC = () => {
   const { quotas, policy, grantQuota, addToQuota, resetMonthlyQuotas, setPolicy, getAllCurrentQuotas, getQuota } = useQuotaStore();
-  const { departments, getDeptById } = useMeetingStore();
+  const { departments, getDeptById, getRoomById } = useMeetingStore();
   const { filterExpenses } = useExpenseStore();
+  const { bookings } = useBookingStore();
 
   const now = new Date();
   const [viewMonth, setViewMonth] = useState({ year: now.getFullYear(), month: now.getMonth() + 1 });
+  const [expandedDept, setExpandedDept] = useState<string | null>(null);
 
   const [grantModalOpen, setGrantModalOpen] = useState(false);
   const [grantType, setGrantType] = useState<'grant' | 'add'>('grant');
@@ -264,97 +273,203 @@ export const QuotaPage: React.FC = () => {
             const pending = exp?.pending ?? 0;
             const selfpay = exp?.selfpay ?? 0;
             const rejected = exp?.rejected ?? 0;
+            const isExpanded = expandedDept === dept.id;
+            const deptExpenses = filterExpenses({
+              deptId: dept.id,
+              startDate: monthStart,
+              endDate: monthEnd,
+            }).sort((a, b) => a.expenseDate.localeCompare(b.expenseDate));
             return (
               <div
                 key={dept.id}
                 className={cn(
-                  'p-5 transition-colors hover:bg-slate-50/60',
+                  'transition-colors',
                   status === 'danger' && 'bg-rose-50/30',
                   status === 'warning' && 'bg-amber-50/20',
                 )}
               >
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div className="flex items-start gap-4 flex-1 min-w-0">
-                    <div className={cn('w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-sm', colorMap(dept.color, 100), textColorMap(dept.color))}>
-                      <span className="font-bold font-serif text-lg">{dept.name.slice(0, 1)}</span>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <h3 className="font-semibold text-slate-900">{dept.name}</h3>
-                        <span className="text-xs text-slate-500">主管：{dept.manager}</span>
-                        {status === 'danger' && <Badge variant="danger">已超额</Badge>}
-                        {status === 'warning' && <Badge variant="warning">额度预警</Badge>}
-                        {status === 'normal' && total > 0 && <Badge variant="success">正常</Badge>}
-                        {total === 0 && <Badge variant="neutral">未发放</Badge>}
+                <div
+                  className={cn('p-5 transition-colors cursor-pointer hover:bg-slate-50/60')}
+                  onClick={() => setExpandedDept(isExpanded ? null : dept.id)}
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="flex items-start gap-4 flex-1 min-w-0">
+                      <div className={cn('w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-sm', colorMap(dept.color, 100), textColorMap(dept.color))}>
+                        <span className="font-bold font-serif text-lg">{dept.name.slice(0, 1)}</span>
                       </div>
-                      <div className="mt-3 max-w-lg">
-                        <div className="flex items-center justify-between text-xs mb-1.5">
-                          <span className="text-slate-500">额度使用率</span>
-                          <span className="font-mono font-semibold text-slate-800">{pct}%</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="font-semibold text-slate-900">{dept.name}</h3>
+                          <span className="text-xs text-slate-500">主管：{dept.manager}</span>
+                          {status === 'danger' && <Badge variant="danger">已超额</Badge>}
+                          {status === 'warning' && <Badge variant="warning">额度预警</Badge>}
+                          {status === 'normal' && total > 0 && <Badge variant="success">正常</Badge>}
+                          {total === 0 && <Badge variant="neutral">未发放</Badge>}
+                          <button className="p-0.5 text-slate-400 hover:text-primary-600 transition-colors">
+                            {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                          </button>
                         </div>
-                        <div className="h-2.5 w-full rounded-full bg-slate-100 overflow-hidden">
-                          <div
-                            className={cn(
-                              'h-full rounded-full transition-all duration-500',
-                              status === 'danger' && 'bg-gradient-to-r from-rose-400 to-rose-600',
-                              status === 'warning' && 'bg-gradient-to-r from-amber-400 to-amber-600',
-                              status === 'normal' && 'bg-gradient-to-r from-teal-400 to-emerald-600',
-                              pct === 0 && 'bg-slate-200',
+                        <div className="mt-3 max-w-lg">
+                          <div className="flex items-center justify-between text-xs mb-1.5">
+                            <span className="text-slate-500">额度使用率</span>
+                            <span className="font-mono font-semibold text-slate-800">{pct}%</span>
+                          </div>
+                          <div className="h-2.5 w-full rounded-full bg-slate-100 overflow-hidden">
+                            <div
+                              className={cn(
+                                'h-full rounded-full transition-all duration-500',
+                                status === 'danger' && 'bg-gradient-to-r from-rose-400 to-rose-600',
+                                status === 'warning' && 'bg-gradient-to-r from-amber-400 to-amber-600',
+                                status === 'normal' && 'bg-gradient-to-r from-teal-400 to-emerald-600',
+                                pct === 0 && 'bg-slate-200',
+                              )}
+                              style={{ width: `${Math.min(pct, 100)}%` }}
+                            />
+                            {status === 'danger' && over > 0 && total > 0 && (
+                              <div className="h-full -mt-2.5 bg-gradient-to-r from-rose-200 to-rose-100 rounded-full" style={{ width: `${Math.min(100, (over / total) * 100 + 100)}%`, marginLeft: '100%' }} />
                             )}
-                            style={{ width: `${Math.min(pct, 100)}%` }}
-                          />
-                          {status === 'danger' && over > 0 && total > 0 && (
-                            <div className="h-full -mt-2.5 bg-gradient-to-r from-rose-200 to-rose-100 rounded-full" style={{ width: `${Math.min(100, (over / total) * 100 + 100)}%`, marginLeft: '100%' }} />
-                          )}
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-slate-500">
-                          <span className="flex items-center gap-1">
-                            <span className="w-2 h-2 rounded-full bg-teal-500" />
-                            已用 <span className="font-mono text-slate-700">{formatCurrency(used)}</span>
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <span className="w-2 h-2 rounded-full bg-sky-400" />
-                            待申请 <span className="font-mono text-slate-700">{formatCurrency(pending)}</span>
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <span className="w-2 h-2 rounded-full bg-amber-500" />
-                            自费 <span className="font-mono text-slate-700">{formatCurrency(selfpay)}</span>
-                          </span>
-                          {rejected > 0 && (
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-slate-500">
                             <span className="flex items-center gap-1">
-                              <span className="w-2 h-2 rounded-full bg-rose-500" />
-                              驳回 <span className="font-mono text-slate-700">{formatCurrency(rejected)}</span>
+                              <span className="w-2 h-2 rounded-full bg-teal-500" />
+                              已用 <span className="font-mono text-slate-700">{formatCurrency(used)}</span>
                             </span>
-                          )}
+                            <span className="flex items-center gap-1">
+                              <span className="w-2 h-2 rounded-full bg-sky-400" />
+                              待申请 <span className="font-mono text-slate-700">{formatCurrency(pending)}</span>
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <span className="w-2 h-2 rounded-full bg-amber-500" />
+                              自费 <span className="font-mono text-slate-700">{formatCurrency(selfpay)}</span>
+                            </span>
+                            {rejected > 0 && (
+                              <span className="flex items-center gap-1">
+                                <span className="w-2 h-2 rounded-full bg-rose-500" />
+                                驳回 <span className="font-mono text-slate-700">{formatCurrency(rejected)}</span>
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
+                    <div className="grid grid-cols-3 gap-4 text-sm shrink-0">
+                      <div className="text-center">
+                        <p className="text-slate-400 text-xs mb-1">总额度</p>
+                        <p className="font-mono font-bold text-slate-900">{formatCurrency(total)}</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-slate-400 text-xs mb-1">{over > 0 ? '超额部分' : '剩余可用'}</p>
+                        <p className={cn(
+                          'font-mono font-bold',
+                          over > 0 ? 'text-rose-700' : 'text-emerald-700',
+                        )}>{formatCurrency(over > 0 ? over : remaining)}</p>
+                      </div>
+                      <div className="text-center flex flex-col justify-center gap-1.5">
+                        <Button size="sm" variant="outline" icon={<Plus size={14} />} onClick={(e) => { e.stopPropagation(); openGrant('add', dept.id); }}>
+                          追加
+                        </Button>
+                        <Button size="sm" icon={<ArrowUpCircle size={14} />} onClick={(e) => { e.stopPropagation(); openGrant('grant', dept.id); }}>
+                          重设
+                        </Button>
+                      </div>
+                    </div>
                   </div>
-                  <div className="grid grid-cols-3 gap-4 text-sm shrink-0">
-                    <div className="text-center">
-                      <p className="text-slate-400 text-xs mb-1">总额度</p>
-                      <p className="font-mono font-bold text-slate-900">{formatCurrency(total)}</p>
+                  {q?.resetAt && (
+                    <div className="mt-2 pl-16 text-xs text-slate-400">
+                      最近重置：{new Date(q.resetAt).toLocaleString('zh-CN')}
                     </div>
-                    <div className="text-center">
-                      <p className="text-slate-400 text-xs mb-1">{over > 0 ? '超额部分' : '剩余可用'}</p>
-                      <p className={cn(
-                        'font-mono font-bold',
-                        over > 0 ? 'text-rose-700' : 'text-emerald-700',
-                      )}>{formatCurrency(over > 0 ? over : remaining)}</p>
-                    </div>
-                    <div className="text-center flex flex-col justify-center gap-1.5">
-                      <Button size="sm" variant="outline" icon={<Plus size={14} />} onClick={() => openGrant('add', dept.id)}>
-                        追加
-                      </Button>
-                      <Button size="sm" icon={<ArrowUpCircle size={14} />} onClick={() => openGrant('grant', dept.id)}>
-                        重设
-                      </Button>
-                    </div>
-                  </div>
+                  )}
                 </div>
-                {q?.resetAt && (
-                  <div className="mt-2 pl-16 text-xs text-slate-400">
-                    最近重置：{new Date(q.resetAt).toLocaleString('zh-CN')}
+
+                {isExpanded && (
+                  <div className="border-t border-slate-100 bg-slate-50/40 animate-slide-down">
+                    <div className="px-5 py-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <h4 className="text-sm font-semibold text-slate-800 flex items-center gap-2">
+                          <FileText size={14} className="text-primary-700" />
+                          月度对账单 · {viewMonth.year} 年 {viewMonth.month} 月
+                        </h4>
+                        <div className="flex items-center gap-3 text-xs">
+                          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-teal-500" />额度消费</span>
+                          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />自费</span>
+                          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-sky-400" />待申请</span>
+                          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500" />已驳回</span>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-5 gap-3 mb-3">
+                        <div className="p-2.5 rounded-lg bg-white border border-slate-100 text-center">
+                          <p className="text-[10px] text-slate-400">总额度</p>
+                          <p className="font-mono font-bold text-slate-800 text-sm">{formatCurrency(total)}</p>
+                        </div>
+                        <div className="p-2.5 rounded-lg bg-teal-50 border border-teal-100 text-center">
+                          <p className="text-[10px] text-teal-600">额度消费</p>
+                          <p className="font-mono font-bold text-teal-800 text-sm">{formatCurrency(used)}</p>
+                        </div>
+                        <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-100 text-center">
+                          <p className="text-[10px] text-amber-600">自费消费</p>
+                          <p className="font-mono font-bold text-amber-800 text-sm">{formatCurrency(selfpay)}</p>
+                        </div>
+                        <div className="p-2.5 rounded-lg bg-sky-50 border border-sky-100 text-center">
+                          <p className="text-[10px] text-sky-600">待申请</p>
+                          <p className="font-mono font-bold text-sky-800 text-sm">{formatCurrency(pending)}</p>
+                        </div>
+                        <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-100 text-center">
+                          <p className="text-[10px] text-rose-600">已驳回</p>
+                          <p className="font-mono font-bold text-rose-800 text-sm">{formatCurrency(rejected)}</p>
+                        </div>
+                      </div>
+
+                      {deptExpenses.length === 0 ? (
+                        <div className="p-6 text-center text-sm text-slate-400">本月暂无消费记录</div>
+                      ) : (
+                        <table className="w-full text-xs">
+                          <thead className="bg-white/70 border-b border-slate-200">
+                            <tr>
+                              <th className="text-left px-3 py-2 text-slate-500 font-medium">日期</th>
+                              <th className="text-left px-3 py-2 text-slate-500 font-medium">会议室</th>
+                              <th className="text-left px-3 py-2 text-slate-500 font-medium">时段</th>
+                              <th className="text-right px-3 py-2 text-slate-500 font-medium">时长</th>
+                              <th className="text-right px-3 py-2 text-slate-500 font-medium">金额</th>
+                              <th className="text-left px-3 py-2 text-slate-500 font-medium">类型</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {deptExpenses.map((e) => {
+                              const room = getRoomById(e.roomId);
+                              const booking = bookings.find((b) => b.id === e.bookingId);
+                              const typeLabel = e.payType === 'quota' ? '额度' : e.payType === 'selfpay' ? '自费' : e.payType === 'rejected' ? '已驳回' : '待申请';
+                              const typeColor = e.payType === 'quota' ? 'text-teal-700 bg-teal-50' : e.payType === 'selfpay' ? 'text-amber-700 bg-amber-50' : e.payType === 'rejected' ? 'text-rose-700 bg-rose-50' : 'text-sky-700 bg-sky-50';
+                              return (
+                                <tr key={e.id} className={cn(e.payType === 'rejected' && 'opacity-50')}>
+                                  <td className="px-3 py-2 font-mono">{e.expenseDate}</td>
+                                  <td className="px-3 py-2">{room?.name ?? '-'}</td>
+                                  <td className="px-3 py-2 font-mono text-slate-500">
+                                    {booking ? `${formatTime(booking.startAt)}-${formatTime(booking.endAt)}` : '-'}
+                                  </td>
+                                  <td className="px-3 py-2 text-right font-mono">{e.hours.toFixed(1)}h</td>
+                                  <td className={cn('px-3 py-2 text-right font-mono font-semibold', e.payType === 'rejected' && 'line-through text-slate-400')}>
+                                    {formatCurrency(e.amount)}
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium', typeColor)}>{typeLabel}</span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                          <tfoot className="border-t border-slate-200 bg-white/50">
+                            <tr>
+                              <td colSpan={4} className="px-3 py-2 text-right text-slate-500 font-medium">合计</td>
+                              <td className="px-3 py-2 text-right font-mono font-bold text-slate-900">
+                                {formatCurrency(deptExpenses.reduce((s, e) => s + (e.payType !== 'rejected' ? e.amount : 0), 0))}
+                              </td>
+                              <td />
+                            </tr>
+                          </tfoot>
+                        </table>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>

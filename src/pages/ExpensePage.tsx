@@ -128,16 +128,18 @@ export const ExpensePage: React.FC = () => {
 
   const summary = useMemo(() => {
     let total = 0, quota = 0, self = 0, hours = 0, pending = 0, rejected = 0;
+    let effectiveCount = 0;
     for (const e of filtered) {
       total += e.amount;
       hours += e.hours;
-      if (e.payType === 'quota') quota += e.amount;
-      else if (e.payType === 'selfpay') self += e.amount;
+      if (e.payType === 'quota') { quota += e.amount; effectiveCount++; }
+      else if (e.payType === 'selfpay') { self += e.amount; effectiveCount++; }
       else if (e.payType === 'pending_apply') pending += e.amount;
       else if (e.payType === 'rejected') rejected += e.amount;
     }
     return {
       count: filtered.length,
+      effectiveCount,
       total: Math.round(total * 100) / 100,
       quota: Math.round(quota * 100) / 100,
       self: Math.round(self * 100) / 100,
@@ -342,7 +344,7 @@ export const ExpensePage: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <StatCard title="有效消费笔数" value={summary.count - (summary.pending > 0 ? 0 : 0) - (summary.rejected > 0 ? 0 : 0)} variant="primary" icon={<FileText size={20} />} />
+        <StatCard title="有效消费笔数" value={summary.effectiveCount} variant="primary" icon={<FileText size={20} />} subtitle="仅额度和自费" />
         <StatCard title="额度消费" value={formatCurrency(summary.quota)} variant="teal" icon={<Banknote size={20} />} />
         <StatCard title="自费消费" value={formatCurrency(summary.self)} variant="amber" icon={<CreditCard size={20} />} />
         <StatCard title="待申请金额" value={formatCurrency(summary.pending)} variant="info" icon={<AlertTriangle size={20} />} />
@@ -483,6 +485,7 @@ export const ExpensePage: React.FC = () => {
                 { value: 'quota', label: '额度消费' },
                 { value: 'selfpay', label: '自费消费' },
                 { value: 'pending_apply', label: '待申请' },
+                { value: 'rejected', label: '已驳回' },
               ]}
             />
             <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} placeholder="起始日期" />
@@ -708,6 +711,27 @@ export const ExpensePage: React.FC = () => {
       >
         {detailModal && (
           <div className="space-y-4">
+            {detailModal.payType === 'rejected' && (
+              <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 flex items-start gap-3">
+                <X size={20} className="text-rose-600 mt-0.5 shrink-0" />
+                <div className="text-sm">
+                  <p className="font-semibold text-rose-800">此记录已被驳回</p>
+                  <p className="text-xs mt-1 text-rose-700">
+                    驳回后不占用部门额度，不占用会议室排期
+                  </p>
+                  {detailModal.rejectRemark && (
+                    <p className="text-xs mt-2 text-rose-800 bg-rose-100 rounded-lg px-3 py-2">
+                      <span className="font-semibold">驳回原因：</span>{detailModal.rejectRemark}
+                    </p>
+                  )}
+                  {detailModal.rejectAt && (
+                    <p className="text-xs mt-1 text-rose-600">
+                      驳回时间：{formatDateTime(new Date(detailModal.rejectAt))}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
             <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
               <div>
                 <dt className="text-slate-400 text-xs mb-1">消费编号</dt>
@@ -741,20 +765,42 @@ export const ExpensePage: React.FC = () => {
                 <dt className="text-slate-400 text-xs mb-1">支付类型</dt>
                 <dd>
                   {detailModal.payType === 'quota' ? (
-                    <Badge variant="success">额度消费</Badge>
+                    <Badge variant="success"><Banknote size={11} className="mr-1" /> 额度消费</Badge>
                   ) : detailModal.payType === 'pending_apply' ? (
-                    <Badge variant="info">待申请审批</Badge>
+                    <Badge variant="info"><AlertTriangle size={11} className="mr-1" /> 待申请审批</Badge>
+                  ) : detailModal.payType === 'rejected' ? (
+                    <Badge variant="danger"><X size={11} className="mr-1" /> 已驳回</Badge>
                   ) : (
-                    <Badge variant="warning">自费 · {detailModal.reimburser}</Badge>
+                    <Badge variant="warning"><CreditCard size={11} className="mr-1" /> 自费 · {detailModal.reimburser}</Badge>
                   )}
                 </dd>
               </div>
-              <div className="col-span-2 p-4 rounded-xl bg-gradient-to-r from-primary-50 to-teal-50 border border-primary-100 flex items-center justify-between">
+              {detailModal.payType === 'selfpay' && detailModal.reimburser && (
                 <div>
-                  <p className="text-xs text-slate-500">消费总金额</p>
+                  <dt className="text-slate-400 text-xs mb-1">报销人</dt>
+                  <dd className="text-slate-800">{detailModal.reimburser}</dd>
+                </div>
+              )}
+              {detailModal.approveAt && detailModal.payType === 'quota' && (
+                <div>
+                  <dt className="text-slate-400 text-xs mb-1">审批通过时间</dt>
+                  <dd className="font-mono text-slate-700 text-xs">{formatDateTime(new Date(detailModal.approveAt))}</dd>
+                </div>
+              )}
+              <div className={cn(
+                'col-span-2 p-4 rounded-xl flex items-center justify-between',
+                detailModal.payType === 'rejected'
+                  ? 'bg-slate-50 border border-slate-100'
+                  : 'bg-gradient-to-r from-primary-50 to-teal-50 border border-primary-100',
+              )}>
+                <div>
+                  <p className="text-xs text-slate-500">{detailModal.payType === 'rejected' ? '原申请金额' : '消费总金额'}</p>
                   <p className="text-xs text-slate-600 mt-0.5">生成时间 {formatDateTime(new Date())}</p>
                 </div>
-                <p className="font-mono font-bold text-primary-800 text-2xl">{formatCurrency(detailModal.amount)}</p>
+                <p className={cn(
+                  'font-mono font-bold text-2xl',
+                  detailModal.payType === 'rejected' ? 'text-slate-400 line-through' : 'text-primary-800',
+                )}>{formatCurrency(detailModal.amount)}</p>
               </div>
             </dl>
           </div>

@@ -113,7 +113,7 @@ export const useBookingStore = create<BookingState>()(
 
       checkConflict: (roomId, startAt, endAt, excludeId) => {
         return get().bookings.find((b) => {
-          if (b.status === 'cancelled') return false;
+          if (b.status === 'cancelled' || b.status === 'rejected') return false;
           if (excludeId && b.id === excludeId) return false;
           if (b.roomId !== roomId) return false;
           return isTimeOverlap(b.startAt, b.endAt, startAt, endAt);

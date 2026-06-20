@@ -42,6 +42,7 @@ import {
   cancelBookingWithWorkflow,
   moveBookingWithWorkflow,
   approvePendingBooking,
+  rejectPendingBooking,
 } from '@/utils/bookingWorkflow';
 
 const HOUR_START = 8;
@@ -77,6 +78,9 @@ const deviceTypeLabels: Record<DeviceType, string> = {
 export const SchedulePage: React.FC = () => {
   const { rooms, departments, devices, addRoom, updateRoom, removeRoom, addDevice, updateDevice, removeDevice, toggleDeviceEnabled, getDeptById, getDevicesByRoomId } = useMeetingStore();
   const { bookings, addBooking, updateBooking, cancelBooking, moveBooking, checkConflict } = useBookingStore();
+
+  const [statusFilter, setStatusFilter] = useState<'all' | 'confirmed' | 'selfpay' | 'pending_apply' | 'rejected'>('all');
+  const [showCancelled, setShowCancelled] = useState(false);
 
   const [weekBase, setWeekBase] = useState<Date>(() => startOfWeek(new Date(), { weekStartsOn: 1 }));
   const weekDates = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekBase, i)), [weekBase]);
@@ -231,10 +235,36 @@ export const SchedulePage: React.FC = () => {
 
   const getBookingsByRoomAndDate = (roomId: string, date: Date): Booking[] => {
     const ds = format(date, 'yyyy-MM-dd');
-    return bookings.filter(
-      (b) => b.roomId === roomId && b.status !== 'cancelled' && b.startAt.slice(0, 10) === ds,
-    );
+    return bookings.filter((b) => {
+      if (b.roomId !== roomId) return false;
+      if (b.startAt.slice(0, 10) !== ds) return false;
+      if (!showCancelled && b.status === 'cancelled') return false;
+      if (statusFilter === 'all') return b.status !== 'cancelled' || showCancelled;
+      if (statusFilter === 'confirmed') return b.status === 'confirmed' && !b.isSelfPay;
+      if (statusFilter === 'selfpay') return b.isSelfPay && b.status === 'confirmed';
+      return b.status === statusFilter;
+    });
   };
+
+  const filteredBookingCount = useMemo(() => {
+    const start = format(weekDates[0], 'yyyy-MM-dd');
+    const end = format(weekDates[6], 'yyyy-MM-dd');
+    let count = 0;
+    for (const b of bookings) {
+      if (b.startAt.slice(0, 10) < start || b.startAt.slice(0, 10) > end) continue;
+      if (!showCancelled && b.status === 'cancelled') continue;
+      if (statusFilter === 'all') {
+        if (b.status !== 'cancelled' || showCancelled) count++;
+      } else if (statusFilter === 'confirmed') {
+        if (b.status === 'confirmed' && !b.isSelfPay) count++;
+      } else if (statusFilter === 'selfpay') {
+        if (b.isSelfPay && b.status === 'confirmed') count++;
+      } else if (b.status === statusFilter) {
+        count++;
+      }
+    }
+    return count;
+  }, [bookings, weekDates, statusFilter, showCancelled]);
 
   const bookingStyle = (b: Booking) => {
     const sd = parseISO(b.startAt);
@@ -352,36 +382,60 @@ export const SchedulePage: React.FC = () => {
         </aside>
 
         <section className="rounded-2xl border border-slate-200 bg-white shadow-card overflow-hidden">
-          <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white">
-            <div className="flex items-center gap-2">
-              <button
-                onClick={goPrevWeek}
-                className="p-2 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors"
-              >
-                <ChevronLeft size={18} />
-              </button>
-              <button
-                onClick={goToday}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-primary-700 text-white hover:bg-primary-600 transition-colors"
-              >
-                今天
-              </button>
-              <button
-                onClick={goNextWeek}
-                className="p-2 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors"
-              >
-                <ChevronRight size={18} />
-              </button>
-              <div className="ml-2">
-                <p className="font-serif text-base font-semibold text-slate-900">
-                  {formatCNDate(weekDates[0])} - {formatCNDate(weekDates[6])}
-                </p>
+            <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={goPrevWeek}
+                  className="p-2 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors"
+                >
+                  <ChevronLeft size={18} />
+                </button>
+                <button
+                  onClick={goToday}
+                  className="px-3 py-1.5 text-xs font-medium rounded-lg bg-primary-700 text-white hover:bg-primary-600 transition-colors"
+                >
+                  今天
+                </button>
+                <button
+                  onClick={goNextWeek}
+                  className="p-2 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors"
+                >
+                  <ChevronRight size={18} />
+                </button>
+                <div className="ml-2">
+                  <p className="font-serif text-base font-semibold text-slate-900">
+                    {formatCNDate(weekDates[0])} - {formatCNDate(weekDates[6])}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1 p-0.5 rounded-lg bg-slate-100">
+                  {[
+                    { value: 'all', label: '全部' },
+                    { value: 'confirmed', label: '正常' },
+                    { value: 'selfpay', label: '自费' },
+                    { value: 'pending_apply', label: '待申请' },
+                    { value: 'rejected', label: '已驳回' },
+                  ].map((opt) => (
+                    <button
+                      key={opt.value}
+                      onClick={() => setStatusFilter(opt.value as typeof statusFilter)}
+                      className={cn(
+                        'px-2.5 py-1 text-xs font-medium rounded-md transition-all',
+                        statusFilter === opt.value
+                          ? 'bg-white text-primary-700 shadow-sm'
+                          : 'text-slate-500 hover:text-slate-700',
+                      )}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="text-xs text-slate-500">
+                  {filteredBookingCount} 个预约
+                </div>
               </div>
             </div>
-            <div className="text-xs text-slate-500">
-              共 {rooms.length} 个会议室 · {bookings.filter(b => b.startAt.slice(0, 10) >= format(weekDates[0], 'yyyy-MM-dd') && b.startAt.slice(0, 10) <= format(weekDates[6], 'yyyy-MM-dd') && b.status !== 'cancelled').length} 个预约
-            </div>
-          </div>
 
           <div className="overflow-auto max-h-[calc(100vh-320px)]">
             <div className="min-w-[900px]">
@@ -451,7 +505,9 @@ export const SchedulePage: React.FC = () => {
                             key={b.id}
                             className={cn(
                               'absolute left-1 right-1 rounded-lg border px-2 py-1 cursor-move shadow-sm hover:shadow-md transition-all overflow-hidden z-[2]',
-                              b.status === 'pending_apply'
+                              b.status === 'rejected'
+                                ? 'bg-slate-100 border-slate-300 border-dashed opacity-60'
+                                : b.status === 'pending_apply'
                                 ? 'bg-violet-50 border-violet-300 border-dashed border-2'
                                 : b.isSelfPay ? 'bg-amber-50 border-amber-300' : dept ? cn(colorMap(dept.color, 50), borderColorMap(dept.color)) : 'bg-slate-50 border-slate-200',
                               dragging?.bookingId === b.id && 'ring-2 ring-primary-500',
@@ -467,10 +523,18 @@ export const SchedulePage: React.FC = () => {
                             <div className="flex items-start gap-1 min-h-0">
                               <GripVertical size={12} className={cn('mt-0.5 shrink-0', dept ? textColorMap(dept.color) : 'text-slate-400')} />
                               <div className="min-w-0 flex-1">
-                                <p className={cn('text-[11px] font-semibold truncate', b.status === 'pending_apply' ? 'text-violet-700' : dept ? textColorMap(dept.color) : 'text-slate-700')}>
+                                <p className={cn(
+                                  'text-[11px] font-semibold truncate',
+                                  b.status === 'rejected'
+                                    ? 'text-slate-500 line-through'
+                                    : b.status === 'pending_apply'
+                                    ? 'text-violet-700'
+                                    : dept ? textColorMap(dept.color) : 'text-slate-700',
+                                )}>
                                   {b.title}
-                                  {b.isSelfPay && <span className="ml-1 text-amber-600">自费</span>}
+                                  {b.isSelfPay && b.status !== 'rejected' && <span className="ml-1 text-amber-600">自费</span>}
                                   {b.status === 'pending_apply' && <span className="ml-1 text-violet-600">待申请</span>}
+                                  {b.status === 'rejected' && <span className="ml-1 text-slate-500">已驳回</span>}
                                 </p>
                                 <p className="text-[10px] text-slate-500 font-mono">
                                   {formatTime(b.startAt)}-{formatTime(b.endAt)}
@@ -490,6 +554,7 @@ export const SchedulePage: React.FC = () => {
             <span>提示：双击空白时段可快速新建预约，拖拽预约块可移动时间或会议室</span>
             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-amber-50 border border-amber-300" />自费预约</span>
             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-violet-50 border-2 border-dashed border-violet-300" />待申请</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-slate-100 border border-dashed border-slate-300" />已驳回</span>
           </div>
         </section>
       </div>
@@ -641,21 +706,39 @@ export const SchedulePage: React.FC = () => {
             {editingBooking && (
               <>
                 {editingBooking.status === 'pending_apply' && (
-                  <Button
-                    variant="secondary"
-                    icon={<Check size={16} />}
-                    onClick={() => {
-                      const r = approvePendingBooking(editingBooking.id);
-                      if (r.ok) {
-                        alert(r.message);
-                        setBookingModalOpen(false);
-                      } else {
-                        setConflictMsg(r.message);
-                      }
-                    }}
-                  >
-                    审批通过
-                  </Button>
+                  <>
+                    <Button
+                      variant="secondary"
+                      icon={<Check size={16} />}
+                      onClick={() => {
+                        const r = approvePendingBooking(editingBooking.id);
+                        if (r.ok) {
+                          alert(r.message);
+                          setBookingModalOpen(false);
+                        } else {
+                          setConflictMsg(r.message);
+                        }
+                      }}
+                    >
+                      审批通过
+                    </Button>
+                    <Button
+                      variant="danger"
+                      icon={<X size={16} />}
+                      onClick={() => {
+                        const reason = prompt('请输入驳回原因（选填）：') ?? undefined;
+                        const r = rejectPendingBooking(editingBooking.id, reason);
+                        if (r.ok) {
+                          alert(r.message);
+                          setBookingModalOpen(false);
+                        } else {
+                          alert(r.message);
+                        }
+                      }}
+                    >
+                      驳回申请
+                    </Button>
+                  </>
                 )}
                 <Button
                   variant="danger"

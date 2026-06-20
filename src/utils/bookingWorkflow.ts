@@ -350,13 +350,37 @@ export function approvePendingBooking(bookingId: string): WorkflowResult {
     return { ok: false, message: `额度仍不足，差额 ¥${(amount - remaining).toFixed(2)}` };
   }
 
-  useBookingStore.getState().updateBooking(bookingId, { status: 'confirmed' });
+  useBookingStore.getState().updateBooking(bookingId, { status: 'confirmed', approveAt: new Date().toISOString() });
   const expense = useExpenseStore.getState().getExpenseByBookingId(bookingId);
   if (expense) {
-    useExpenseStore.getState().updateExpense(expense.id, { payType: 'quota', reimburser: undefined });
+    useExpenseStore.getState().updateExpense(expense.id, { payType: 'quota', reimburser: undefined, approveAt: new Date().toISOString() });
   }
   consumeQuota(booking.deptId, ym.year, ym.month, amount);
   return { ok: true, message: '审批通过，已扣额度' };
+}
+
+export function rejectPendingBooking(bookingId: string, remark?: string): WorkflowResult {
+  const booking = useBookingStore.getState().bookings.find((b) => b.id === bookingId);
+  if (!booking || booking.status !== 'pending_apply') {
+    return { ok: false, message: '非待申请状态的预约' };
+  }
+
+  useBookingStore.getState().updateBooking(bookingId, {
+    status: 'rejected',
+    rejectRemark: remark,
+    rejectAt: new Date().toISOString(),
+  });
+
+  const expense = useExpenseStore.getState().getExpenseByBookingId(bookingId);
+  if (expense) {
+    useExpenseStore.getState().updateExpense(expense.id, {
+      payType: 'rejected',
+      rejectRemark: remark,
+      rejectAt: new Date().toISOString(),
+    });
+  }
+
+  return { ok: true, message: '已驳回，排期已释放' };
 }
 
 export function switchExpensePayType(expenseId: string, targetType: 'quota' | 'selfpay', reimburser?: string): WorkflowResult {

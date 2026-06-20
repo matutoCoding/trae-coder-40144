@@ -8,6 +8,8 @@ import {
   Banknote,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
   ArrowLeftRight,
   FileText,
   TrendingUp,
@@ -15,6 +17,7 @@ import {
   BarChart3 as BarIcon,
   AlertTriangle,
   Check as CheckIcon,
+  X,
 } from 'lucide-react';
 import {
   BarChart,
@@ -41,11 +44,15 @@ import { useMeetingStore } from '@/stores/meetingStore';
 import { Expense, PayType } from '@/types';
 import { cn, formatCurrency, colorMap, textColorMap } from '@/lib/utils';
 import { formatDateTime, getRecentMonths, formatDate } from '@/utils/dateUtils';
-import { switchExpensePayType, approvePendingBooking } from '@/utils/bookingWorkflow';
+import { switchExpensePayType, approvePendingBooking, rejectPendingBooking } from '@/utils/bookingWorkflow';
 
 export const ExpensePage: React.FC = () => {
   const { expenses, filterExpenses, getStatsByDept, getStatsByRoom, convertToSelfPay, updateExpense } = useExpenseStore();
   const { departments, rooms, getDeptById, getRoomById } = useMeetingStore();
+
+  const now = new Date();
+  const [viewMonth, setViewMonth] = useState({ year: now.getFullYear(), month: now.getMonth() + 1 });
+  const [useMonthFilter, setUseMonthFilter] = useState(true);
 
   const [deptFilter, setDeptFilter] = useState<string>('all');
   const [roomFilter, setRoomFilter] = useState<string>('all');
@@ -61,13 +68,41 @@ export const ExpensePage: React.FC = () => {
   const [reimburser, setReimburser] = useState('');
   const [detailModal, setDetailModal] = useState<Expense | null>(null);
 
+  const monthStart = useMemo(() => {
+    if (!useMonthFilter) return undefined;
+    return `${viewMonth.year}-${String(viewMonth.month).padStart(2, '0')}-01`;
+  }, [viewMonth, useMonthFilter]);
+
+  const monthEnd = useMemo(() => {
+    if (!useMonthFilter) return undefined;
+    const lastDay = new Date(viewMonth.year, viewMonth.month, 0).getDate();
+    return `${viewMonth.year}-${String(viewMonth.month).padStart(2, '0')}-${lastDay}`;
+  }, [viewMonth, useMonthFilter]);
+
+  const goPrevMonth = () => {
+    setViewMonth((m) => {
+      const d = new Date(m.year, m.month - 2, 1);
+      return { year: d.getFullYear(), month: d.getMonth() + 1 };
+    });
+  };
+  const goNextMonth = () => {
+    setViewMonth((m) => {
+      const d = new Date(m.year, m.month, 1);
+      return { year: d.getFullYear(), month: d.getMonth() + 1 };
+    });
+  };
+  const goThisMonth = () => {
+    const n = new Date();
+    setViewMonth({ year: n.getFullYear(), month: n.getMonth() + 1 });
+  };
+
   const filtered = useMemo(() => {
     let list = filterExpenses({
       deptId: deptFilter === 'all' ? undefined : deptFilter,
       roomId: roomFilter === 'all' ? undefined : roomFilter,
       payType: payTypeFilter,
-      startDate: startDate || undefined,
-      endDate: endDate || undefined,
+      startDate: monthStart || startDate || undefined,
+      endDate: monthEnd || endDate || undefined,
     });
     if (keyword) {
       const kw = keyword.toLowerCase();
@@ -89,16 +124,17 @@ export const ExpensePage: React.FC = () => {
       return sortDir === 'asc' ? r : -r;
     });
     return list;
-  }, [expenses, deptFilter, roomFilter, payTypeFilter, startDate, endDate, keyword, sortField, sortDir, filterExpenses, getDeptById, getRoomById]);
+  }, [expenses, deptFilter, roomFilter, payTypeFilter, monthStart, monthEnd, startDate, endDate, keyword, sortField, sortDir, filterExpenses, getDeptById, getRoomById]);
 
   const summary = useMemo(() => {
-    let total = 0, quota = 0, self = 0, hours = 0, pending = 0;
+    let total = 0, quota = 0, self = 0, hours = 0, pending = 0, rejected = 0;
     for (const e of filtered) {
       total += e.amount;
       hours += e.hours;
       if (e.payType === 'quota') quota += e.amount;
       else if (e.payType === 'selfpay') self += e.amount;
       else if (e.payType === 'pending_apply') pending += e.amount;
+      else if (e.payType === 'rejected') rejected += e.amount;
     }
     return {
       count: filtered.length,
@@ -106,33 +142,60 @@ export const ExpensePage: React.FC = () => {
       quota: Math.round(quota * 100) / 100,
       self: Math.round(self * 100) / 100,
       pending: Math.round(pending * 100) / 100,
+      rejected: Math.round(rejected * 100) / 100,
       hours: Math.round(hours * 100) / 100,
       avg: filtered.length ? Math.round((total / filtered.length) * 100) / 100 : 0,
     };
   }, [filtered]);
 
   const deptChartData = useMemo(() => {
-    return getStatsByDept()
+    const map = new Map<string, { deptId: string; total: number; selfPay: number; quota: number; pending: number; rejected: number }>();
+    for (const e of filtered) {
+      const entry = map.get(e.deptId) ?? { deptId: e.deptId, total: 0, selfPay: 0, quota: 0, pending: 0, rejected: 0 };
+      if (e.payType === 'quota') {
+        entry.quota += e.amount;
+        entry.total += e.amount;
+      } else if (e.payType === 'selfpay') {
+        entry.selfPay += e.amount;
+        entry.total += e.amount;
+      } else if (e.payType === 'pending_apply') {
+        entry.pending += e.amount;
+      } else if (e.payType === 'rejected') {
+        entry.rejected += e.amount;
+      }
+      map.set(e.deptId, entry);
+    }
+    return Array.from(map.values())
       .map((s) => ({
         name: getDeptById(s.deptId)?.name ?? s.deptId,
-        总消费: s.total,
-        自费: s.selfPay,
-        额度: Math.max(0, s.total - s.selfPay),
+        额度消费: Math.round(s.quota * 100) / 100,
+        自费: Math.round(s.selfPay * 100) / 100,
+        有效消费: Math.round((s.quota + s.selfPay) * 100) / 100,
+        待申请: Math.round(s.pending * 100) / 100,
+        已驳回: Math.round(s.rejected * 100) / 100,
         color: getDeptById(s.deptId)?.color ?? 'blue',
       }))
-      .sort((a, b) => b.总消费 - a.总消费);
-  }, [expenses, getStatsByDept, getDeptById]);
+      .sort((a, b) => b.有效消费 - a.有效消费);
+  }, [filtered, getDeptById]);
 
   const roomChartData = useMemo(() => {
-    return getStatsByRoom()
+    const map = new Map<string, { roomId: string; total: number; hours: number }>();
+    for (const e of filtered) {
+      if (e.payType === 'rejected') continue;
+      const entry = map.get(e.roomId) ?? { roomId: e.roomId, total: 0, hours: 0 };
+      entry.total += e.amount;
+      entry.hours += e.hours;
+      map.set(e.roomId, entry);
+    }
+    return Array.from(map.values())
       .map((s) => ({
         name: getRoomById(s.roomId)?.name ?? s.roomId,
-        消费金额: s.total,
+        消费金额: Math.round(s.total * 100) / 100,
         使用小时: Math.round(s.hours * 10) / 10,
       }))
       .sort((a, b) => b.消费金额 - a.消费金额)
       .slice(0, 8);
-  }, [expenses, getStatsByRoom, getRoomById]);
+  }, [filtered, getRoomById]);
 
   const monthlyTrendData = useMemo(() => {
     const months = getRecentMonths(6);
@@ -140,16 +203,20 @@ export const ExpensePage: React.FC = () => {
       const start = `${m.label}-01`;
       const end = m.label + '-' + new Date(m.year, m.month, 0).getDate().toString().padStart(2, '0');
       const list = filterExpenses({ startDate: start, endDate: end });
-      let quota = 0, self = 0;
+      let quota = 0, self = 0, pending = 0, rejected = 0;
       for (const e of list) {
         if (e.payType === 'quota') quota += e.amount;
         else if (e.payType === 'selfpay') self += e.amount;
+        else if (e.payType === 'pending_apply') pending += e.amount;
+        else if (e.payType === 'rejected') rejected += e.amount;
       }
       return {
         name: m.label.slice(5),
         额度消费: Math.round(quota * 100) / 100,
         自费: Math.round(self * 100) / 100,
-        合计: Math.round((quota + self) * 100) / 100,
+        待申请: Math.round(pending * 100) / 100,
+        已驳回: Math.round(rejected * 100) / 100,
+        有效合计: Math.round((quota + self) * 100) / 100,
       };
     });
   }, [expenses, filterExpenses]);
@@ -163,9 +230,9 @@ export const ExpensePage: React.FC = () => {
         c === 'green' ? '#10b981' :
         c === 'amber' ? '#f59e0b' :
         c === 'rose' ? '#f43f5e' : '#8b5cf6';
-      data.push({ name: s.name, value: s.总消费, color: colorCode });
+      data.push({ name: s.name, value: s.有效消费, color: colorCode });
     }
-    return data;
+    return data.filter((d) => d.value > 0);
   }, [deptChartData]);
 
   const toggleSort = (f: typeof sortField) => {
@@ -211,11 +278,43 @@ export const ExpensePage: React.FC = () => {
   return (
     <div className="space-y-6 animate-fade-in">
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="font-serif text-2xl font-bold text-slate-900">消费明细</h1>
-          <p className="text-sm text-slate-500 mt-1">全量预约消费记录查询、自费转换与多维度统计分析</p>
+        <div className="flex items-center gap-4">
+          <div>
+            <h1 className="font-serif text-2xl font-bold text-slate-900">消费明细</h1>
+            <p className="text-sm text-slate-500 mt-1">
+              {useMonthFilter ? `${viewMonth.year} 年 ${viewMonth.month} 月 · ` : ''}全量预约消费记录查询、自费转换与多维度统计分析
+            </p>
+          </div>
+          {useMonthFilter && (
+            <div className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-white border border-slate-200 shadow-sm">
+              <button
+                onClick={goPrevMonth}
+                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-700 transition-colors"
+                title="上个月"
+              >
+                <ChevronLeft size={16} />
+              </button>
+              <button
+                onClick={goThisMonth}
+                className="px-2 py-0.5 text-sm font-medium text-slate-700 hover:text-primary-700 rounded hover:bg-primary-50 transition-colors"
+                title="回到本月"
+              >
+                {viewMonth.year} 年 {viewMonth.month} 月
+              </button>
+              <button
+                onClick={goNextMonth}
+                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-700 transition-colors"
+                title="下个月"
+              >
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => setUseMonthFilter((v) => !v)}>
+            {useMonthFilter ? '查看全部' : '按月查看'}
+          </Button>
           <Button variant="outline" icon={<Download size={16} />} onClick={() => {
             const header = ['日期', '部门', '会议室', '时长', '单价', '金额', '类型', '报销人'];
             const rows = filtered.map((e) => [
@@ -225,7 +324,7 @@ export const ExpensePage: React.FC = () => {
               `${e.hours}h`,
               e.unitPrice.toFixed(2),
               e.amount.toFixed(2),
-              e.payType === 'quota' ? '额度' : e.payType === 'selfpay' ? '自费' : '待申请',
+              e.payType === 'quota' ? '额度' : e.payType === 'selfpay' ? '自费' : e.payType === 'rejected' ? '已驳回' : '待申请',
               e.reimburser ?? '',
             ].join(','));
             const csv = [header.join(','), ...rows].join('\n');
@@ -243,14 +342,11 @@ export const ExpensePage: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <StatCard title="消费笔数" value={summary.count} variant="primary" icon={<FileText size={20} />} />
-        <StatCard title="消费总金额" value={formatCurrency(summary.total)} variant="teal" icon={<Receipt size={20} />} />
-        <StatCard title="额度消费" value={formatCurrency(summary.quota)} variant="amber" icon={<Banknote size={20} />} />
-        <StatCard title="自费消费" value={formatCurrency(summary.self)} variant="rose" icon={<CreditCard size={20} />} />
-        {summary.pending > 0 && (
-          <StatCard title="待申请金额" value={formatCurrency(summary.pending)} variant="info" icon={<AlertTriangle size={20} />} />
-        )}
-        <StatCard title="累计使用时长" value={`${summary.hours} h`} variant="default" icon={<TrendingUp size={20} />} subtitle={`单均 ${formatCurrency(summary.avg)}`} />
+        <StatCard title="有效消费笔数" value={summary.count - (summary.pending > 0 ? 0 : 0) - (summary.rejected > 0 ? 0 : 0)} variant="primary" icon={<FileText size={20} />} />
+        <StatCard title="额度消费" value={formatCurrency(summary.quota)} variant="teal" icon={<Banknote size={20} />} />
+        <StatCard title="自费消费" value={formatCurrency(summary.self)} variant="amber" icon={<CreditCard size={20} />} />
+        <StatCard title="待申请金额" value={formatCurrency(summary.pending)} variant="info" icon={<AlertTriangle size={20} />} />
+        <StatCard title="已驳回金额" value={formatCurrency(summary.rejected)} variant="rose" icon={<X size={20} />} />
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white shadow-card overflow-hidden">
@@ -277,7 +373,7 @@ export const ExpensePage: React.FC = () => {
                     <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `¥${v}`} />
                     <Tooltip formatter={(v: number) => formatCurrency(v)} />
                     <Legend wrapperStyle={{ fontSize: 12 }} />
-                    <RechartsBar dataKey="额度" stackId="a" fill="#0d9488" radius={[0, 0, 4, 4]} />
+                    <RechartsBar dataKey="额度消费" stackId="a" fill="#0d9488" radius={[0, 0, 4, 4]} />
                     <RechartsBar dataKey="自费" stackId="a" fill="#f59e0b" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -321,6 +417,8 @@ export const ExpensePage: React.FC = () => {
                     <Legend wrapperStyle={{ fontSize: 12 }} />
                     <Line type="monotone" dataKey="额度消费" stroke="#0d9488" strokeWidth={2.5} dot={{ r: 4 }} />
                     <Line type="monotone" dataKey="自费" stroke="#f59e0b" strokeWidth={2.5} dot={{ r: 4 }} />
+                    <Line type="monotone" dataKey="待申请" stroke="#6366f1" strokeWidth={2} dot={{ r: 3 }} strokeDasharray="5 5" />
+                    <Line type="monotone" dataKey="已驳回" stroke="#f43f5e" strokeWidth={2} dot={{ r: 3 }} strokeDasharray="3 3" />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -446,9 +544,15 @@ export const ExpensePage: React.FC = () => {
                 const dept = getDeptById(e.deptId);
                 const room = getRoomById(e.roomId);
                 return (
-                  <tr key={e.id} className="hover:bg-slate-50/60 transition-colors group">
+                  <tr key={e.id} className={cn(
+                    'transition-colors group',
+                    e.payType === 'rejected' ? 'bg-rose-50/30 hover:bg-rose-50/50' : 'hover:bg-slate-50/60',
+                  )}>
                     <td className="px-4 py-3">
-                      <p className="font-mono text-slate-800">{e.expenseDate}</p>
+                      <p className={cn(
+                        'font-mono',
+                        e.payType === 'rejected' ? 'text-slate-400 line-through' : 'text-slate-800',
+                      )}>{e.expenseDate}</p>
                       <p className="text-[10px] text-slate-400 font-mono">{e.id.slice(-8)}</p>
                     </td>
                     <td className="px-4 py-3">
@@ -459,17 +563,22 @@ export const ExpensePage: React.FC = () => {
                       )}
                     </td>
                     <td className="px-4 py-3 text-slate-800">
-                      <p className="font-medium">{room?.name}</p>
+                      <p className={cn('font-medium', e.payType === 'rejected' && 'text-slate-500')}>{room?.name}</p>
                       <p className="text-[11px] text-slate-500">{room?.location}</p>
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-slate-700">{e.hours.toFixed(1)}h</td>
                     <td className="px-4 py-3 text-right font-mono text-slate-600">{formatCurrency(e.unitPrice)}</td>
-                    <td className="px-4 py-3 text-right font-mono font-bold text-slate-900">{formatCurrency(e.amount)}</td>
+                    <td className={cn(
+                      'px-4 py-3 text-right font-mono font-bold',
+                      e.payType === 'rejected' ? 'text-slate-400 line-through' : 'text-slate-900',
+                    )}>{formatCurrency(e.amount)}</td>
                     <td className="px-4 py-3">
                       {e.payType === 'quota' ? (
                         <Badge variant="success"><Banknote size={11} className="mr-1" /> 额度</Badge>
                       ) : e.payType === 'pending_apply' ? (
                         <Badge variant="info"><AlertTriangle size={11} className="mr-1" /> 待申请审批</Badge>
+                      ) : e.payType === 'rejected' ? (
+                        <Badge variant="danger"><X size={11} className="mr-1" /> 已驳回</Badge>
                       ) : (
                         <Badge variant="warning"><CreditCard size={11} className="mr-1" /> 自费 · {e.reimburser}</Badge>
                       )}
@@ -484,29 +593,48 @@ export const ExpensePage: React.FC = () => {
                           <FileText size={14} />
                         </button>
                         {e.payType === 'pending_apply' && e.bookingId && (
-                          <button
-                            onClick={() => {
-                              if (confirm('审批通过？通过后将占用部门额度。')) {
-                                const r = approvePendingBooking(e.bookingId!);
-                                if (!r.ok) alert(r.message);
-                              }
-                            }}
-                            className="p-1.5 rounded-md text-teal-600 hover:bg-teal-50"
-                            title="审批通过"
-                          >
-                            <CheckIcon size={14} />
-                          </button>
+                          <>
+                            <button
+                              onClick={() => {
+                                if (confirm('审批通过？通过后将占用部门额度。')) {
+                                  const r = approvePendingBooking(e.bookingId!);
+                                  if (!r.ok) alert(r.message);
+                                }
+                              }}
+                              className="p-1.5 rounded-md text-teal-600 hover:bg-teal-50"
+                              title="审批通过"
+                            >
+                              <CheckIcon size={14} />
+                            </button>
+                            <button
+                              onClick={() => {
+                                const remark = prompt('请输入驳回原因（选填）：');
+                                if (remark !== null) {
+                                  const r = rejectPendingBooking(e.bookingId!, remark || undefined);
+                                  if (!r.ok) alert(r.message);
+                                }
+                              }}
+                              className="p-1.5 rounded-md text-rose-600 hover:bg-rose-50"
+                              title="驳回"
+                            >
+                              <X size={14} />
+                            </button>
+                          </>
                         )}
-                        {e.payType !== 'pending_apply' && (
+                        {e.payType === 'quota' && (
                           <button
                             onClick={() => openSelfPay(e)}
-                            className={cn(
-                              'p-1.5 rounded-md',
-                              e.payType === 'selfpay'
-                                ? 'text-amber-600 hover:bg-amber-50'
-                                : 'text-slate-500 hover:bg-rose-50 hover:text-rose-600',
-                            )}
-                            title={e.payType === 'selfpay' ? '取消自费' : '转自费'}
+                            className="p-1.5 rounded-md text-slate-500 hover:bg-rose-50 hover:text-rose-600"
+                            title="转自费"
+                          >
+                            <ArrowLeftRight size={14} />
+                          </button>
+                        )}
+                        {e.payType === 'selfpay' && (
+                          <button
+                            onClick={() => openSelfPay(e)}
+                            className="p-1.5 rounded-md text-amber-600 hover:bg-amber-50"
+                            title="取消自费"
                           >
                             <ArrowLeftRight size={14} />
                           </button>

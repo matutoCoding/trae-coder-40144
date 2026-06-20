@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { Expense } from '@/types';
+import { Expense, PayType } from '@/types';
 import { seedExpenses } from '@/data/seed';
 import { generateId } from '@/lib/utils';
 
@@ -9,7 +9,7 @@ interface ExpenseFilter {
   roomId?: string;
   startDate?: string;
   endDate?: string;
-  payType?: 'quota' | 'selfpay' | 'pending_apply' | 'all';
+  payType?: PayType | 'all';
 }
 
 interface ExpenseState {

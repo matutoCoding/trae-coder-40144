@@ -43,7 +43,7 @@ export interface RecurringRule {
   enabled: boolean;
 }
 
-export type BookingStatus = 'confirmed' | 'cancelled' | 'pending' | 'pending_apply';
+export type BookingStatus = 'confirmed' | 'cancelled' | 'pending' | 'pending_apply' | 'rejected';
 export type BookingSource = 'manual' | 'recurring';
 
 export interface Booking {
@@ -58,6 +58,10 @@ export interface Booking {
   source: BookingSource;
   isSelfPay: boolean;
   applyRemark?: string;
+  rejectRemark?: string;
+  rejectAt?: string;
+  approveAt?: string;
+  approveBy?: string;
 }
 
 export interface Quota {
@@ -70,7 +74,7 @@ export interface Quota {
   resetAt: string;
 }
 
-export type PayType = 'quota' | 'selfpay' | 'pending_apply';
+export type PayType = 'quota' | 'selfpay' | 'pending_apply' | 'rejected';
 export type OverQuotaStrategy = 'block' | 'apply' | 'selfpay';
 
 export interface Expense {
@@ -84,6 +88,9 @@ export interface Expense {
   amount: number;
   payType: PayType;
   reimburser?: string;
+  rejectRemark?: string;
+  rejectAt?: string;
+  approveAt?: string;
 }
 
 export interface QuotaPolicy {

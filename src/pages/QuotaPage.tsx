@@ -11,6 +11,9 @@ import {
   ArrowUpCircle,
   Check,
   X,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -31,13 +34,12 @@ const OVER_QUOTA_OPTIONS: Array<{ value: OverQuotaStrategy; label: string; desc:
 ];
 
 export const QuotaPage: React.FC = () => {
-  const { quotas, policy, grantQuota, addToQuota, resetMonthlyQuotas, setPolicy, getAllCurrentQuotas } = useQuotaStore();
+  const { quotas, policy, grantQuota, addToQuota, resetMonthlyQuotas, setPolicy, getAllCurrentQuotas, getQuota } = useQuotaStore();
   const { departments, getDeptById } = useMeetingStore();
   const { filterExpenses } = useExpenseStore();
 
   const now = new Date();
-  const ymState = useState({ year: now.getFullYear(), month: now.getMonth() + 1 });
-  const [ym] = ymState;
+  const [viewMonth, setViewMonth] = useState({ year: now.getFullYear(), month: now.getMonth() + 1 });
 
   const [grantModalOpen, setGrantModalOpen] = useState(false);
   const [grantType, setGrantType] = useState<'grant' | 'add'>('grant');
@@ -49,27 +51,75 @@ export const QuotaPage: React.FC = () => {
   const [policyOpen, setPolicyOpen] = useState(false);
   const [localPolicy, setLocalPolicy] = useState(policy);
 
-  const currentQuotas = getAllCurrentQuotas();
-  const quotaByDept = useMemo(() => {
+  const monthStart = `${viewMonth.year}-${String(viewMonth.month).padStart(2, '0')}-01`;
+  const monthEnd = `${viewMonth.year}-${String(viewMonth.month).padStart(2, '0')}-${new Date(viewMonth.year, viewMonth.month, 0).getDate()}`;
+
+  const goPrevMonth = () => {
+    setViewMonth((m) => {
+      const d = new Date(m.year, m.month - 2, 1);
+      return { year: d.getFullYear(), month: d.getMonth() + 1 };
+    });
+  };
+  const goNextMonth = () => {
+    setViewMonth((m) => {
+      const d = new Date(m.year, m.month, 1);
+      return { year: d.getFullYear(), month: d.getMonth() + 1 };
+    });
+  };
+  const goThisMonth = () => {
+    const n = new Date();
+    setViewMonth({ year: n.getFullYear(), month: n.getMonth() + 1 });
+  };
+
+  const monthQuotas = useMemo(() => {
     const m = new Map<string, (typeof quotas)[number]>();
     for (const q of quotas) {
-      if (q.year === ym.year && q.month === ym.month) m.set(q.deptId, q);
+      if (q.year === viewMonth.year && q.month === viewMonth.month) m.set(q.deptId, q);
     }
     return m;
-  }, [quotas, ym]);
+  }, [quotas, viewMonth]);
+
+  const monthExpensesByDept = useMemo(() => {
+    const list = filterExpenses({ startDate: monthStart, endDate: monthEnd });
+    const map = new Map<string, { quota: number; selfpay: number; pending: number; rejected: number }>();
+    for (const e of list) {
+      const entry = map.get(e.deptId) ?? { quota: 0, selfpay: 0, pending: 0, rejected: 0 };
+      if (e.payType === 'quota') entry.quota += e.amount;
+      else if (e.payType === 'selfpay') entry.selfpay += e.amount;
+      else if (e.payType === 'pending_apply') entry.pending += e.amount;
+      else if (e.payType === 'rejected') entry.rejected += e.amount;
+      map.set(e.deptId, entry);
+    }
+    return map;
+  }, [filterExpenses, monthStart, monthEnd]);
 
   const overallStats = useMemo(() => {
-    let total = 0, used = 0;
-    for (const q of currentQuotas) {
+    let total = 0, used = 0, pending = 0, rejected = 0, selfpay = 0;
+    for (const q of monthQuotas.values()) {
       total += q.totalAmount;
       used += q.usedAmount;
     }
-    const over = currentQuotas.filter((q) => q.usedAmount > q.totalAmount);
-    const warn = currentQuotas.filter(
+    for (const e of monthExpensesByDept.values()) {
+      pending += e.pending;
+      rejected += e.rejected;
+      selfpay += e.selfpay;
+    }
+    const over = Array.from(monthQuotas.values()).filter((q) => q.usedAmount > q.totalAmount);
+    const warn = Array.from(monthQuotas.values()).filter(
       (q) => q.totalAmount > 0 && q.usedAmount / q.totalAmount >= 0.8 && q.usedAmount <= q.totalAmount,
     );
-    return { total, used, remaining: Math.max(0, total - used), pct: total ? Math.round((used / total) * 100) : 0, overCount: over.length, warnCount: warn.length };
-  }, [currentQuotas]);
+    return {
+      total,
+      used,
+      pending: Math.round(pending * 100) / 100,
+      rejected: Math.round(rejected * 100) / 100,
+      selfpay: Math.round(selfpay * 100) / 100,
+      remaining: Math.max(0, total - used),
+      pct: total ? Math.round((used / total) * 100) : 0,
+      overCount: over.length,
+      warnCount: warn.length,
+    };
+  }, [monthQuotas, monthExpensesByDept]);
 
   const openGrant = (type: 'grant' | 'add', deptId = '') => {
     setGrantType(type);
@@ -80,8 +130,8 @@ export const QuotaPage: React.FC = () => {
   const submitGrant = () => {
     const amount = parseFloat(grantForm.amount);
     if (!grantForm.deptId || isNaN(amount) || amount <= 0) return;
-    if (grantType === 'grant') grantQuota(grantForm.deptId, ym.year, ym.month, amount);
-    else addToQuota(grantForm.deptId, ym.year, ym.month, amount);
+    if (grantType === 'grant') grantQuota(grantForm.deptId, viewMonth.year, viewMonth.month, amount);
+    else addToQuota(grantForm.deptId, viewMonth.year, viewMonth.month, amount);
     setGrantModalOpen(false);
   };
 
@@ -91,41 +141,68 @@ export const QuotaPage: React.FC = () => {
   };
 
   const triggerReset = () => {
-    if (confirm('确定重置本月所有部门额度吗？已使用额度将归零，不累加到下月。')) {
+    if (confirm(`确定重置 ${viewMonth.year} 年 ${viewMonth.month} 月所有部门额度吗？已使用额度将归零，不累加到下月。`)) {
       resetMonthlyQuotas();
     }
   };
 
-  const getDeptExpenseSum = (deptId: string) => {
-    const list = filterExpenses({ deptId });
-    return list.reduce((s, e) => s + e.amount, 0);
-  };
+  const isCurrentMonth = viewMonth.year === now.getFullYear() && viewMonth.month === now.getMonth() + 1;
 
   return (
     <div className="space-y-6 animate-fade-in">
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="font-serif text-2xl font-bold text-slate-900">额度管控</h1>
-          <p className="text-sm text-slate-500 mt-1">
-            {ym.year} 年 {ym.month} 月 · 部门月度额度发放、使用与策略管理
-          </p>
+        <div className="flex items-center gap-4">
+          <div>
+            <h1 className="font-serif text-2xl font-bold text-slate-900">额度管控</h1>
+            <p className="text-sm text-slate-500 mt-1">
+              部门月度额度发放、使用与策略管理
+            </p>
+          </div>
+          <div className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-white border border-slate-200 shadow-sm">
+            <button
+              onClick={goPrevMonth}
+              className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-700 transition-colors"
+              title="上个月"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <button
+              onClick={goThisMonth}
+              className={cn(
+                'px-2 py-0.5 text-sm font-medium rounded hover:bg-primary-50 transition-colors',
+                isCurrentMonth ? 'text-primary-700 font-semibold' : 'text-slate-700 hover:text-primary-700',
+              )}
+              title="回到本月"
+            >
+              {viewMonth.year} 年 {viewMonth.month} 月
+            </button>
+            <button
+              onClick={goNextMonth}
+              className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-700 transition-colors"
+              title="下个月"
+            >
+              <ChevronRight size={16} />
+            </button>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" icon={<Settings size={16} />} onClick={() => { setLocalPolicy(policy); setPolicyOpen(true); }}>
             策略配置
           </Button>
-          <Button variant="outline" icon={<RefreshCw size={16} />} onClick={triggerReset}>
-            重置本月额度
-          </Button>
+          {isCurrentMonth && (
+            <Button variant="outline" icon={<RefreshCw size={16} />} onClick={triggerReset}>
+              重置本月额度
+            </Button>
+          )}
           <Button icon={<Plus size={16} />} onClick={() => openGrant('grant')}>
             发放额度
           </Button>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <StatCard
-          title="本月发放总额度"
+          title="发放总额度"
           value={formatCurrency(overallStats.total)}
           variant="primary"
           icon={<Wallet size={20} />}
@@ -139,17 +216,24 @@ export const QuotaPage: React.FC = () => {
           trend={{ direction: overallStats.pct > 50 ? 'up' : 'flat', value: `${overallStats.pct}%` }}
         />
         <StatCard
-          title="剩余可用额度"
+          title="剩余可用"
           value={formatCurrency(overallStats.remaining)}
           variant="amber"
           icon={<PiggyBank size={20} />}
         />
         <StatCard
-          title="预警 / 超额部门"
-          value={`${overallStats.warnCount} / ${overallStats.overCount}`}
+          title="待申请金额"
+          value={formatCurrency(overallStats.pending)}
+          variant="info"
+          icon={<Clock size={20} />}
+          subtitle="待审批中"
+        />
+        <StatCard
+          title="已驳回金额"
+          value={formatCurrency(overallStats.rejected)}
           variant="rose"
-          icon={<AlertTriangle size={20} />}
-          subtitle="含使用率≥80%"
+          icon={<X size={20} />}
+          subtitle={`${overallStats.warnCount + overallStats.overCount} 个部门预警`}
         />
       </div>
 
@@ -158,24 +242,28 @@ export const QuotaPage: React.FC = () => {
           <div className="flex items-center gap-3">
             <Shield size={18} className="text-primary-700" />
             <h2 className="font-serif font-semibold text-slate-900">部门额度明细</h2>
-            <Badge variant="info">当月 · {ym.year}-{String(ym.month).padStart(2, '0')}</Badge>
+            <Badge variant="info">{viewMonth.year}-{String(viewMonth.month).padStart(2, '0')}</Badge>
           </div>
           <div className="flex items-center gap-3 text-xs text-slate-500">
-            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />正常</span>
-            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-amber-500" />预警≥80%</span>
-            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-rose-500" />超额</span>
+            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-teal-500" />已使用</span>
+            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-sky-400" />待申请</span>
+            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-amber-500" />自费</span>
+            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-rose-500" />已驳回</span>
           </div>
         </div>
         <div className="divide-y divide-slate-100">
           {departments.map((dept) => {
-            const q = quotaByDept.get(dept.id);
+            const q = monthQuotas.get(dept.id);
             const status = getQuotaStatus(q);
             const pct = getQuotaPercent(q);
-            const historyTotal = Math.round(getDeptExpenseSum(dept.id) * 100) / 100;
+            const exp = monthExpensesByDept.get(dept.id);
             const used = q?.usedAmount ?? 0;
             const total = q?.totalAmount ?? 0;
             const remaining = Math.max(0, total - used);
             const over = Math.max(0, used - total);
+            const pending = exp?.pending ?? 0;
+            const selfpay = exp?.selfpay ?? 0;
+            const rejected = exp?.rejected ?? 0;
             return (
               <div
                 key={dept.id}
@@ -186,12 +274,12 @@ export const QuotaPage: React.FC = () => {
                 )}
               >
                 <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div className="flex items-start gap-4">
+                  <div className="flex items-start gap-4 flex-1 min-w-0">
                     <div className={cn('w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-sm', colorMap(dept.color, 100), textColorMap(dept.color))}>
                       <span className="font-bold font-serif text-lg">{dept.name.slice(0, 1)}</span>
                     </div>
-                    <div>
-                      <div className="flex items-center gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="font-semibold text-slate-900">{dept.name}</h3>
                         <span className="text-xs text-slate-500">主管：{dept.manager}</span>
                         {status === 'danger' && <Badge variant="danger">已超额</Badge>}
@@ -199,9 +287,9 @@ export const QuotaPage: React.FC = () => {
                         {status === 'normal' && total > 0 && <Badge variant="success">正常</Badge>}
                         {total === 0 && <Badge variant="neutral">未发放</Badge>}
                       </div>
-                      <div className="mt-3 max-w-md">
+                      <div className="mt-3 max-w-lg">
                         <div className="flex items-center justify-between text-xs mb-1.5">
-                          <span className="text-slate-500">使用率</span>
+                          <span className="text-slate-500">额度使用率</span>
                           <span className="font-mono font-semibold text-slate-800">{pct}%</span>
                         </div>
                         <div className="h-2.5 w-full rounded-full bg-slate-100 overflow-hidden">
@@ -215,27 +303,40 @@ export const QuotaPage: React.FC = () => {
                             )}
                             style={{ width: `${Math.min(pct, 100)}%` }}
                           />
-                          {status === 'danger' && (
+                          {status === 'danger' && over > 0 && total > 0 && (
                             <div className="h-full -mt-2.5 bg-gradient-to-r from-rose-200 to-rose-100 rounded-full" style={{ width: `${Math.min(100, (over / total) * 100 + 100)}%`, marginLeft: '100%' }} />
+                          )}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-slate-500">
+                          <span className="flex items-center gap-1">
+                            <span className="w-2 h-2 rounded-full bg-teal-500" />
+                            已用 <span className="font-mono text-slate-700">{formatCurrency(used)}</span>
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <span className="w-2 h-2 rounded-full bg-sky-400" />
+                            待申请 <span className="font-mono text-slate-700">{formatCurrency(pending)}</span>
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <span className="w-2 h-2 rounded-full bg-amber-500" />
+                            自费 <span className="font-mono text-slate-700">{formatCurrency(selfpay)}</span>
+                          </span>
+                          {rejected > 0 && (
+                            <span className="flex items-center gap-1">
+                              <span className="w-2 h-2 rounded-full bg-rose-500" />
+                              驳回 <span className="font-mono text-slate-700">{formatCurrency(rejected)}</span>
+                            </span>
                           )}
                         </div>
                       </div>
                     </div>
                   </div>
-                  <div className="grid grid-cols-4 gap-6 text-sm min-w-[480px]">
+                  <div className="grid grid-cols-3 gap-4 text-sm shrink-0">
                     <div className="text-center">
                       <p className="text-slate-400 text-xs mb-1">总额度</p>
                       <p className="font-mono font-bold text-slate-900">{formatCurrency(total)}</p>
                     </div>
                     <div className="text-center">
-                      <p className="text-slate-400 text-xs mb-1">已使用</p>
-                      <p className={cn(
-                        'font-mono font-bold',
-                        status === 'danger' ? 'text-rose-700' : 'text-slate-900',
-                      )}>{formatCurrency(used)}</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-slate-400 text-xs mb-1">{over > 0 ? '超额部分' : '剩余'}</p>
+                      <p className="text-slate-400 text-xs mb-1">{over > 0 ? '超额部分' : '剩余可用'}</p>
                       <p className={cn(
                         'font-mono font-bold',
                         over > 0 ? 'text-rose-700' : 'text-emerald-700',
@@ -251,12 +352,11 @@ export const QuotaPage: React.FC = () => {
                     </div>
                   </div>
                 </div>
-                <div className="mt-3 pl-16 flex items-center gap-4 text-xs text-slate-500">
-                  <span>历史累计消费：<span className="font-mono text-slate-700">{formatCurrency(historyTotal)}</span></span>
-                  {q?.resetAt && (
-                    <span>最近重置：{new Date(q.resetAt).toLocaleString('zh-CN')}</span>
-                  )}
-                </div>
+                {q?.resetAt && (
+                  <div className="mt-2 pl-16 text-xs text-slate-400">
+                    最近重置：{new Date(q.resetAt).toLocaleString('zh-CN')}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -282,7 +382,7 @@ export const QuotaPage: React.FC = () => {
             value={grantForm.deptId}
             onChange={(e) => setGrantForm({ ...grantForm, deptId: e.target.value })}
             options={departments.map((d) => {
-              const q = quotaByDept.get(d.id);
+              const q = monthQuotas.get(d.id);
               const label = q
                 ? `${d.name} (当前 ${formatCurrency(q.totalAmount)} / 已用 ${formatCurrency(q.usedAmount)})`
                 : `${d.name} (未发放)`;
@@ -302,7 +402,7 @@ export const QuotaPage: React.FC = () => {
             <div className="flex items-end">
               <div className="p-3 rounded-lg bg-slate-50 border border-slate-100 w-full">
                 <p className="text-xs text-slate-500 mb-0.5">生效月份</p>
-                <p className="font-mono font-semibold text-slate-800">{ym.year} 年 {ym.month} 月</p>
+                <p className="font-mono font-semibold text-slate-800">{viewMonth.year} 年 {viewMonth.month} 月</p>
               </div>
             </div>
           </div>

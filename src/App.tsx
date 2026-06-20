@@ -4,6 +4,7 @@ import { SchedulePage } from '@/pages/SchedulePage';
 import { RecurringPage } from '@/pages/RecurringPage';
 import { QuotaPage } from '@/pages/QuotaPage';
 import { ExpensePage } from '@/pages/ExpensePage';
+import { ApprovalPage } from '@/pages/ApprovalPage';
 
 function App() {
   return (
@@ -13,6 +14,7 @@ function App() {
           <Route path="/" element={<Navigate to="/schedule" replace />} />
           <Route path="/schedule" element={<SchedulePage />} />
           <Route path="/recurring" element={<RecurringPage />} />
+          <Route path="/approval" element={<ApprovalPage />} />
           <Route path="/quota" element={<QuotaPage />} />
           <Route path="/expense" element={<ExpensePage />} />
           <Route path="*" element={<Navigate to="/schedule" replace />} />

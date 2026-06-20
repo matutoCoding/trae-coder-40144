@@ -9,24 +9,29 @@ import {
   Bell,
   User,
   RotateCcw,
+  ClipboardCheck,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useBookingStore } from '@/stores/bookingStore';
 
 interface NavItem {
   to: string;
   label: string;
   icon: React.ReactNode;
+  badge?: number;
 }
-
-const navItems: NavItem[] = [
-  { to: '/schedule', label: '会议室排期', icon: <CalendarClock size={18} /> },
-  { to: '/recurring', label: '周期生成', icon: <Repeat size={18} /> },
-  { to: '/quota', label: '额度管控', icon: <Wallet size={18} /> },
-  { to: '/expense', label: '消费明细', icon: <Receipt size={18} /> },
-];
 
 export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const navigate = useNavigate();
+  const pendingCount = useBookingStore((s) => s.bookings.filter((b) => b.status === 'pending_apply').length);
+
+  const navItems: NavItem[] = [
+    { to: '/schedule', label: '会议室排期', icon: <CalendarClock size={18} /> },
+    { to: '/recurring', label: '周期生成', icon: <Repeat size={18} /> },
+    { to: '/approval', label: '审批中心', icon: <ClipboardCheck size={18} />, badge: pendingCount || undefined },
+    { to: '/quota', label: '额度管控', icon: <Wallet size={18} /> },
+    { to: '/expense', label: '消费明细', icon: <Receipt size={18} /> },
+  ];
 
   const handleResetAll = () => {
     if (confirm('确定要重置所有数据吗？此操作将恢复为初始演示数据。')) {
@@ -78,11 +83,16 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
                     <>
                       <span
                         className={cn(
-                          'transition-colors',
+                          'transition-colors relative',
                           isActive ? 'text-primary-700' : 'text-slate-400',
                         )}
                       >
                         {item.icon}
+                        {item.badge && item.badge > 0 && (
+                          <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center leading-none">
+                            {item.badge > 99 ? '99+' : item.badge}
+                          </span>
+                        )}
                       </span>
                       {item.label}
                       {isActive && (
@@ -131,7 +141,7 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
               to={item.to}
               className={({ isActive }) =>
                 cn(
-                  'shrink-0 px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap flex items-center gap-1.5',
+                  'shrink-0 px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap flex items-center gap-1.5 relative',
                   isActive
                     ? 'text-primary-800 bg-primary-50'
                     : 'text-slate-600 bg-slate-50',
@@ -140,6 +150,11 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
             >
               {item.icon}
               {item.label}
+              {item.badge && item.badge > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-3.5 px-0.5 rounded-full bg-rose-500 text-white text-[9px] font-bold flex items-center justify-center leading-none">
+                  {item.badge > 99 ? '99+' : item.badge}
+                </span>
+              )}
             </NavLink>
           ))}
         </div>

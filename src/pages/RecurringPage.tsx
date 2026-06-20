@@ -32,7 +32,7 @@ import { RecurringRule, RecurringInterval } from '@/types';
 import { cn, colorMap, textColorMap, borderColorMap, formatCurrency } from '@/lib/utils';
 import { WEEKDAY_LABELS, formatTime, calcHours } from '@/utils/dateUtils';
 import { generateOccurrences, GeneratedOccurrence } from '@/utils/recurrenceEngine';
-import { checkQuota } from '@/utils/quotaValidator';
+import { createBookingsBatchWithWorkflow } from '@/utils/bookingWorkflow';
 
 interface RuleFormData {
   title: string;
@@ -61,9 +61,8 @@ const defaultForm = (): RuleFormData => ({
 export const RecurringPage: React.FC = () => {
   const { rules, addRule, updateRule, removeRule, toggleRuleEnabled } = useRuleStore();
   const { departments, rooms, getDeptById, getRoomById } = useMeetingStore();
-  const { addBookingsBatch, checkConflict, getBookingsByRuleId } = useBookingStore();
-  const { getCurrentQuota, policy } = useQuotaStore();
-  const { addExpenses } = useExpenseStore();
+  const { checkConflict, getBookingsByRuleId } = useBookingStore();
+  const { policy } = useQuotaStore();
 
   const [ruleModalOpen, setRuleModalOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<RecurringRule | null>(null);
@@ -93,11 +92,7 @@ export const RecurringPage: React.FC = () => {
     };
   }, [occurrences, occurrenceSelection, previewRoom]);
 
-  const quotaCheck = useMemo(() => {
-    if (!previewRule || !previewDept) return null;
-    const quota = getCurrentQuota(previewDept.id);
-    return checkQuota(quota, previewCost.totalAmount, policy.overQuotaStrategy);
-  }, [previewRule, previewDept, previewCost.totalAmount, getCurrentQuota, policy.overQuotaStrategy]);
+  const quotaCheck = null;
 
   const toggleWeekday = (d: number) => {
     setForm((f) => {
@@ -162,53 +157,29 @@ export const RecurringPage: React.FC = () => {
       else toGenerate.push(o);
     }
 
-    const isSelfPay = quotaCheck && !quotaCheck.ok && policy.overQuotaStrategy === 'selfpay';
-
-    const created = addBookingsBatch(
+    const batchResult = createBookingsBatchWithWorkflow(
       toGenerate.map((o) => ({
         roomId: previewRule.roomId,
         deptId: previewRule.deptId,
-        ruleId: previewRule.id,
         title: previewRule.title,
         startAt: o.startAt,
         endAt: o.endAt,
         source: 'recurring',
-        isSelfPay,
+        ruleId: previewRule.id,
       })),
     );
 
-    const expenses = created.map((b, i) => {
-      const o = toGenerate[i];
-      return {
-        bookingId: b.id,
-        deptId: b.deptId,
-        roomId: b.roomId,
-        expenseDate: b.startAt.slice(0, 10),
-        hours: o.hours,
-        unitPrice: previewRoom.hourlyRate,
-        amount: Math.round(o.hours * previewRoom.hourlyRate * 100) / 100,
-        payType: isSelfPay ? ('selfpay' as const) : ('quota' as const),
-      };
-    });
-    addExpenses(expenses);
-
-    const totalCost = expenses.reduce((s, e) => s + e.amount, 0);
-    if (!isSelfPay) {
-      const quota = getCurrentQuota(previewDept.id);
-      if (quota) {
-        const newUsed = Math.min(quota.totalAmount, quota.usedAmount + totalCost);
-        useQuotaStore.getState().consumeQuota(previewDept.id, quota.year, quota.month, totalCost);
-      }
-    }
-
     setPreviewResult({
-      generated: created.length,
+      generated: batchResult.createdCount + batchResult.selfpayCount,
       skipped: skipConflict.length,
-      cost: Math.round(totalCost * 100) / 100,
+      cost: batchResult.totalQuotaAmount + batchResult.totalSelfpayAmount,
     });
-    if (skipConflict.length > 0) {
-      setPreviewWarning(`${skipConflict.length} 条因时间冲突已跳过`);
-    }
+    const msgs: string[] = [];
+    if (skipConflict.length > 0) msgs.push(`${skipConflict.length} 条因时间冲突已跳过`);
+    if (batchResult.pendingCount > 0) msgs.push(`${batchResult.pendingCount} 条因额度不足转为待申请`);
+    if (batchResult.selfpayCount > 0) msgs.push(`${batchResult.selfpayCount} 条按策略转为自费`);
+    if (batchResult.skippedCount > 0) msgs.push(`${batchResult.skippedCount} 条因额度不足被拦截`);
+    if (msgs.length > 0) setPreviewWarning(msgs.join('；'));
   };
 
   const stats = useMemo(() => {

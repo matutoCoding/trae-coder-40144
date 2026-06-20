@@ -7,7 +7,7 @@ interface StatCardProps {
   subtitle?: string;
   icon?: React.ReactNode;
   trend?: { direction: 'up' | 'down' | 'flat'; value: string };
-  variant?: 'default' | 'primary' | 'teal' | 'amber' | 'rose';
+  variant?: 'default' | 'primary' | 'teal' | 'amber' | 'rose' | 'info';
   className?: string;
   currency?: boolean;
 }
@@ -28,6 +28,7 @@ export const StatCard: React.FC<StatCardProps> = ({
     teal: 'from-teal-50 to-white border-teal-100',
     amber: 'from-amber-50 to-white border-amber-100',
     rose: 'from-rose-50 to-white border-rose-100',
+    info: 'from-sky-50 to-white border-sky-100',
   };
   const iconVariants = {
     default: 'bg-slate-100 text-slate-700',
@@ -35,6 +36,7 @@ export const StatCard: React.FC<StatCardProps> = ({
     teal: 'bg-teal-100 text-teal-700',
     amber: 'bg-amber-100 text-amber-700',
     rose: 'bg-rose-100 text-rose-700',
+    info: 'bg-sky-100 text-sky-700',
   };
   return (
     <div

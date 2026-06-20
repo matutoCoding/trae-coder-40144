@@ -9,7 +9,7 @@ interface ExpenseFilter {
   roomId?: string;
   startDate?: string;
   endDate?: string;
-  payType?: 'quota' | 'selfpay' | 'all';
+  payType?: 'quota' | 'selfpay' | 'pending_apply' | 'all';
 }
 
 interface ExpenseState {

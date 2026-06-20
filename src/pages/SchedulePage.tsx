@@ -24,6 +24,7 @@ import {
   Power,
   Edit3,
   AlertTriangle,
+  Check,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -35,6 +36,13 @@ import { Booking, MeetingRoom, Device, DeviceType } from '@/types';
 import { cn, formatCurrency, generateId } from '@/lib/utils';
 import { WEEKDAY_LABELS, formatCNDate, formatTime } from '@/utils/dateUtils';
 import { colorMap, textColorMap, borderColorMap } from '@/lib/utils';
+import {
+  createBookingWithWorkflow,
+  updateBookingWithWorkflow,
+  cancelBookingWithWorkflow,
+  moveBookingWithWorkflow,
+  approvePendingBooking,
+} from '@/utils/bookingWorkflow';
 
 const HOUR_START = 8;
 const HOUR_END = 20;
@@ -193,8 +201,9 @@ export const SchedulePage: React.FC = () => {
       );
       return;
     }
+    let result;
     if (editingBooking) {
-      updateBooking(editingBooking.id, {
+      result = updateBookingWithWorkflow(editingBooking.id, {
         title,
         roomId,
         deptId,
@@ -203,15 +212,19 @@ export const SchedulePage: React.FC = () => {
         isSelfPay,
       });
     } else {
-      addBooking({
+      result = createBookingWithWorkflow({
         title,
         roomId,
         deptId,
         startAt,
         endAt,
         source: 'manual',
-        isSelfPay,
+        forceSelfPay: isSelfPay,
       });
+    }
+    if (!result.ok) {
+      setConflictMsg(result.message);
+      return;
     }
     setBookingModalOpen(false);
   };
@@ -259,9 +272,9 @@ export const SchedulePage: React.FC = () => {
     const startStr = `${format(date, 'yyyy-MM-dd')}T${String(startH).padStart(2, '0')}:${String(startM).padStart(2, '0')}:00`;
     const endDate = new Date(parseISO(startStr).getTime() + durationMs);
     const endStr = endDate.toISOString();
-    const res = moveBooking(dragging.bookingId, startStr, endStr, roomId);
-    if (!res.ok && res.conflict) {
-      alert(`移动失败：与「${res.conflict.title}」时间冲突`);
+    const res = moveBookingWithWorkflow(dragging.bookingId, startStr, endStr, roomId);
+    if (!res.ok) {
+      alert(`移动失败：${res.message}`);
     }
     setDragging(null);
   };
@@ -438,7 +451,9 @@ export const SchedulePage: React.FC = () => {
                             key={b.id}
                             className={cn(
                               'absolute left-1 right-1 rounded-lg border px-2 py-1 cursor-move shadow-sm hover:shadow-md transition-all overflow-hidden z-[2]',
-                              b.isSelfPay ? 'bg-amber-50 border-amber-300' : dept ? cn(colorMap(dept.color, 50), borderColorMap(dept.color)) : 'bg-slate-50 border-slate-200',
+                              b.status === 'pending_apply'
+                                ? 'bg-violet-50 border-violet-300 border-dashed border-2'
+                                : b.isSelfPay ? 'bg-amber-50 border-amber-300' : dept ? cn(colorMap(dept.color, 50), borderColorMap(dept.color)) : 'bg-slate-50 border-slate-200',
                               dragging?.bookingId === b.id && 'ring-2 ring-primary-500',
                             )}
                             style={style}
@@ -452,9 +467,10 @@ export const SchedulePage: React.FC = () => {
                             <div className="flex items-start gap-1 min-h-0">
                               <GripVertical size={12} className={cn('mt-0.5 shrink-0', dept ? textColorMap(dept.color) : 'text-slate-400')} />
                               <div className="min-w-0 flex-1">
-                                <p className={cn('text-[11px] font-semibold truncate', dept ? textColorMap(dept.color) : 'text-slate-700')}>
+                                <p className={cn('text-[11px] font-semibold truncate', b.status === 'pending_apply' ? 'text-violet-700' : dept ? textColorMap(dept.color) : 'text-slate-700')}>
                                   {b.title}
                                   {b.isSelfPay && <span className="ml-1 text-amber-600">自费</span>}
+                                  {b.status === 'pending_apply' && <span className="ml-1 text-violet-600">待申请</span>}
                                 </p>
                                 <p className="text-[10px] text-slate-500 font-mono">
                                   {formatTime(b.startAt)}-{formatTime(b.endAt)}
@@ -473,6 +489,7 @@ export const SchedulePage: React.FC = () => {
           <div className="px-5 py-3 border-t border-slate-100 bg-slate-50/50 text-xs text-slate-500 flex flex-wrap items-center gap-4">
             <span>提示：双击空白时段可快速新建预约，拖拽预约块可移动时间或会议室</span>
             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-amber-50 border border-amber-300" />自费预约</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-violet-50 border-2 border-dashed border-violet-300" />待申请</span>
           </div>
         </section>
       </div>
@@ -622,18 +639,38 @@ export const SchedulePage: React.FC = () => {
           <>
             <Button variant="ghost" onClick={() => setBookingModalOpen(false)}>取消</Button>
             {editingBooking && (
-              <Button
-                variant="danger"
-                icon={<Trash2 size={16} />}
-                onClick={() => {
-                  if (confirm('确定取消此预约吗？')) {
-                    cancelBooking(editingBooking.id);
-                    setBookingModalOpen(false);
-                  }
-                }}
-              >
-                取消预约
-              </Button>
+              <>
+                {editingBooking.status === 'pending_apply' && (
+                  <Button
+                    variant="secondary"
+                    icon={<Check size={16} />}
+                    onClick={() => {
+                      const r = approvePendingBooking(editingBooking.id);
+                      if (r.ok) {
+                        alert(r.message);
+                        setBookingModalOpen(false);
+                      } else {
+                        setConflictMsg(r.message);
+                      }
+                    }}
+                  >
+                    审批通过
+                  </Button>
+                )}
+                <Button
+                  variant="danger"
+                  icon={<Trash2 size={16} />}
+                  onClick={() => {
+                    if (confirm('确定取消此预约吗？对应额度将退回。')) {
+                      const r = cancelBookingWithWorkflow(editingBooking.id);
+                      if (!r.ok) alert(r.message);
+                      setBookingModalOpen(false);
+                    }
+                  }}
+                >
+                  取消预约
+                </Button>
+              </>
             )}
             <Button onClick={submitBookingForm}>{editingBooking ? '保存修改' : '确认预约'}</Button>
           </>

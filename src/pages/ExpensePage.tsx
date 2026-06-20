@@ -13,6 +13,8 @@ import {
   TrendingUp,
   PieChart as PieChartIcon,
   BarChart3 as BarIcon,
+  AlertTriangle,
+  Check as CheckIcon,
 } from 'lucide-react';
 import {
   BarChart,
@@ -39,6 +41,7 @@ import { useMeetingStore } from '@/stores/meetingStore';
 import { Expense, PayType } from '@/types';
 import { cn, formatCurrency, colorMap, textColorMap } from '@/lib/utils';
 import { formatDateTime, getRecentMonths, formatDate } from '@/utils/dateUtils';
+import { switchExpensePayType, approvePendingBooking } from '@/utils/bookingWorkflow';
 
 export const ExpensePage: React.FC = () => {
   const { expenses, filterExpenses, getStatsByDept, getStatsByRoom, convertToSelfPay, updateExpense } = useExpenseStore();
@@ -89,18 +92,20 @@ export const ExpensePage: React.FC = () => {
   }, [expenses, deptFilter, roomFilter, payTypeFilter, startDate, endDate, keyword, sortField, sortDir, filterExpenses, getDeptById, getRoomById]);
 
   const summary = useMemo(() => {
-    let total = 0, quota = 0, self = 0, hours = 0;
+    let total = 0, quota = 0, self = 0, hours = 0, pending = 0;
     for (const e of filtered) {
       total += e.amount;
       hours += e.hours;
       if (e.payType === 'quota') quota += e.amount;
-      else self += e.amount;
+      else if (e.payType === 'selfpay') self += e.amount;
+      else if (e.payType === 'pending_apply') pending += e.amount;
     }
     return {
       count: filtered.length,
       total: Math.round(total * 100) / 100,
       quota: Math.round(quota * 100) / 100,
       self: Math.round(self * 100) / 100,
+      pending: Math.round(pending * 100) / 100,
       hours: Math.round(hours * 100) / 100,
       avg: filtered.length ? Math.round((total / filtered.length) * 100) / 100 : 0,
     };
@@ -138,7 +143,7 @@ export const ExpensePage: React.FC = () => {
       let quota = 0, self = 0;
       for (const e of list) {
         if (e.payType === 'quota') quota += e.amount;
-        else self += e.amount;
+        else if (e.payType === 'selfpay') self += e.amount;
       }
       return {
         name: m.label.slice(5),
@@ -170,9 +175,14 @@ export const ExpensePage: React.FC = () => {
 
   const openSelfPay = (e: Expense) => {
     if (e.payType === 'selfpay') {
-      if (confirm('确定取消自费，改为使用部门额度吗？')) {
-        updateExpense(e.id, { payType: 'quota', reimburser: undefined });
+      if (confirm('确定取消自费，改为使用部门额度吗？若额度不足将根据当前策略处理。')) {
+        const result = switchExpensePayType(e.id, 'quota');
+        if (!result.ok) alert(result.message);
       }
+      return;
+    }
+    if (e.payType === 'pending_apply') {
+      alert('待申请记录无法直接切换，请先审批或在预约中处理。');
       return;
     }
     setSelfpayModal(e);
@@ -181,7 +191,11 @@ export const ExpensePage: React.FC = () => {
 
   const submitSelfPay = () => {
     if (!selfpayModal || !reimburser) return;
-    convertToSelfPay(selfpayModal.id, reimburser);
+    const result = switchExpensePayType(selfpayModal.id, 'selfpay', reimburser);
+    if (!result.ok) {
+      alert(result.message);
+      return;
+    }
     setSelfpayModal(null);
   };
 
@@ -211,7 +225,7 @@ export const ExpensePage: React.FC = () => {
               `${e.hours}h`,
               e.unitPrice.toFixed(2),
               e.amount.toFixed(2),
-              e.payType === 'quota' ? '额度' : '自费',
+              e.payType === 'quota' ? '额度' : e.payType === 'selfpay' ? '自费' : '待申请',
               e.reimburser ?? '',
             ].join(','));
             const csv = [header.join(','), ...rows].join('\n');
@@ -233,6 +247,9 @@ export const ExpensePage: React.FC = () => {
         <StatCard title="消费总金额" value={formatCurrency(summary.total)} variant="teal" icon={<Receipt size={20} />} />
         <StatCard title="额度消费" value={formatCurrency(summary.quota)} variant="amber" icon={<Banknote size={20} />} />
         <StatCard title="自费消费" value={formatCurrency(summary.self)} variant="rose" icon={<CreditCard size={20} />} />
+        {summary.pending > 0 && (
+          <StatCard title="待申请金额" value={formatCurrency(summary.pending)} variant="info" icon={<AlertTriangle size={20} />} />
+        )}
         <StatCard title="累计使用时长" value={`${summary.hours} h`} variant="default" icon={<TrendingUp size={20} />} subtitle={`单均 ${formatCurrency(summary.avg)}`} />
       </div>
 
@@ -367,6 +384,7 @@ export const ExpensePage: React.FC = () => {
                 { value: 'all', label: '全部类型' },
                 { value: 'quota', label: '额度消费' },
                 { value: 'selfpay', label: '自费消费' },
+                { value: 'pending_apply', label: '待申请' },
               ]}
             />
             <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} placeholder="起始日期" />
@@ -450,6 +468,8 @@ export const ExpensePage: React.FC = () => {
                     <td className="px-4 py-3">
                       {e.payType === 'quota' ? (
                         <Badge variant="success"><Banknote size={11} className="mr-1" /> 额度</Badge>
+                      ) : e.payType === 'pending_apply' ? (
+                        <Badge variant="info"><AlertTriangle size={11} className="mr-1" /> 待申请审批</Badge>
                       ) : (
                         <Badge variant="warning"><CreditCard size={11} className="mr-1" /> 自费 · {e.reimburser}</Badge>
                       )}
@@ -463,18 +483,34 @@ export const ExpensePage: React.FC = () => {
                         >
                           <FileText size={14} />
                         </button>
-                        <button
-                          onClick={() => openSelfPay(e)}
-                          className={cn(
-                            'p-1.5 rounded-md',
-                            e.payType === 'selfpay'
-                              ? 'text-amber-600 hover:bg-amber-50'
-                              : 'text-slate-500 hover:bg-rose-50 hover:text-rose-600',
-                          )}
-                          title={e.payType === 'selfpay' ? '取消自费' : '转自费'}
-                        >
-                          <ArrowLeftRight size={14} />
-                        </button>
+                        {e.payType === 'pending_apply' && e.bookingId && (
+                          <button
+                            onClick={() => {
+                              if (confirm('审批通过？通过后将占用部门额度。')) {
+                                const r = approvePendingBooking(e.bookingId!);
+                                if (!r.ok) alert(r.message);
+                              }
+                            }}
+                            className="p-1.5 rounded-md text-teal-600 hover:bg-teal-50"
+                            title="审批通过"
+                          >
+                            <CheckIcon size={14} />
+                          </button>
+                        )}
+                        {e.payType !== 'pending_apply' && (
+                          <button
+                            onClick={() => openSelfPay(e)}
+                            className={cn(
+                              'p-1.5 rounded-md',
+                              e.payType === 'selfpay'
+                                ? 'text-amber-600 hover:bg-amber-50'
+                                : 'text-slate-500 hover:bg-rose-50 hover:text-rose-600',
+                            )}
+                            title={e.payType === 'selfpay' ? '取消自费' : '转自费'}
+                          >
+                            <ArrowLeftRight size={14} />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -578,6 +614,8 @@ export const ExpensePage: React.FC = () => {
                 <dd>
                   {detailModal.payType === 'quota' ? (
                     <Badge variant="success">额度消费</Badge>
+                  ) : detailModal.payType === 'pending_apply' ? (
+                    <Badge variant="info">待申请审批</Badge>
                   ) : (
                     <Badge variant="warning">自费 · {detailModal.reimburser}</Badge>
                   )}

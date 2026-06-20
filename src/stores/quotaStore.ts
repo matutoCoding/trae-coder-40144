@@ -1,9 +1,9 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { Quota, QuotaPolicy } from '@/types';
-import { seedQuotas, defaultQuotaPolicy } from '@/data/seed';
+import { Quota, QuotaPolicy, Department } from '@/types';
+import { seedQuotas, defaultQuotaPolicy, seedDepartments } from '@/data/seed';
 import { generateId } from '@/lib/utils';
-import { startOfMonth, format } from 'date-fns';
+import { startOfMonth, format, addMonths } from 'date-fns';
 
 interface QuotaState {
   quotas: Quota[];
@@ -16,6 +16,7 @@ interface QuotaState {
   getCurrentQuota: (deptId: string) => Quota | undefined;
   getAllCurrentQuotas: () => Quota[];
   resetMonthlyQuotas: () => void;
+  ensureCurrentMonthQuotas: (departments: Department[]) => void;
   setPolicy: (p: Partial<QuotaPolicy>) => void;
   reset: () => void;
 }
@@ -140,6 +141,54 @@ export const useQuotaStore = create<QuotaState>()(
               : q,
           ),
         }));
+      },
+
+      ensureCurrentMonthQuotas: (departments) => {
+        const now = new Date();
+        const y = now.getFullYear();
+        const m = now.getMonth() + 1;
+        const lastMonth = addMonths(new Date(y, m - 1), -1);
+        const ly = lastMonth.getFullYear();
+        const lm = lastMonth.getMonth() + 1;
+        const resetAt = startOfMonth(now).toISOString();
+
+        set((s) => {
+          const newQuotas = [...s.quotas];
+          let changed = false;
+          const deptList = departments?.length ? departments : seedDepartments;
+          for (const dept of deptList) {
+            const currentExists = s.quotas.find(
+              (q) => q.deptId === dept.id && q.year === y && q.month === m,
+            );
+            if (!currentExists) {
+              const lastMonthQuota = s.quotas.find(
+                (q) => q.deptId === dept.id && q.year === ly && q.month === lm,
+              );
+              const totalAmount = lastMonthQuota ? lastMonthQuota.totalAmount : 5000;
+              newQuotas.push({
+                id: generateId('quota'),
+                deptId: dept.id,
+                year: y,
+                month: m,
+                totalAmount,
+                usedAmount: 0,
+                resetAt,
+              });
+              changed = true;
+            }
+          }
+          if (!s.policy.autoResetMonthly) {
+            return changed ? { quotas: newQuotas } : {};
+          }
+          const resetQuotas = newQuotas.map((q) => {
+            if (q.year === y && q.month === m && (!q.resetAt || q.resetAt !== resetAt)) {
+              changed = true;
+              return { ...q, usedAmount: 0, resetAt };
+            }
+            return q;
+          });
+          return changed ? { quotas: resetQuotas } : {};
+        });
       },
 
       setPolicy: (p) => set((s) => ({ policy: { ...s.policy, ...p } })),
